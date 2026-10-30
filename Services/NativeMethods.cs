@@ -6,6 +6,8 @@ namespace FenceDesk.Services;
 internal static class NativeMethods
 {
     public const int WM_NCHITTEST = 0x0084;
+    public const int WM_MOUSEACTIVATE = 0x0021;
+    public const int MA_NOACTIVATE = 3;
     public const int WM_HOTKEY = 0x0312;
     public const int WM_COMMAND = 0x0111;
     public const int WM_LBUTTONDOWN = 0x0201;
@@ -14,14 +16,20 @@ internal static class NativeMethods
 
     public const int HTTRANSPARENT = -1;
     public const int GWL_EXSTYLE = -20;
+    public const int GWL_STYLE = -16;
+    public const int WS_CHILD = 0x40000000;
+    public const int WS_POPUP = unchecked((int)0x80000000);
     public const int WS_EX_TOOLWINDOW = 0x00000080;
     public const int WS_EX_APPWINDOW = 0x00040000;
 
     public static readonly IntPtr HWND_BOTTOM = new(1);
+    public static readonly IntPtr HWND_TOP = IntPtr.Zero;
     public const uint SWP_NOSIZE = 0x0001;
     public const uint SWP_NOMOVE = 0x0002;
     public const uint SWP_NOACTIVATE = 0x0010;
     public const uint SWP_NOOWNERZORDER = 0x0200;
+    public const uint SWP_FRAMECHANGED = 0x0020;
+    public const uint SWP_SHOWWINDOW = 0x0040;
 
     public const uint MOD_ALT = 0x0001;
     public const uint MOD_CONTROL = 0x0002;
@@ -172,6 +180,15 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetParent(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     public static extern uint GetDoubleClickTime();

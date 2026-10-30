@@ -353,6 +353,33 @@ public static class DesktopService
         }
     }
 
+    public static bool OpenWith(string path, out string? error)
+    {
+        error = null;
+        try
+        {
+            if (!File.Exists(path))
+            {
+                error = "文件已不存在";
+                return false;
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "rundll32.exe",
+                Arguments = "shell32.dll,OpenAs_RunDLL \"" + path + "\"",
+                UseShellExecute = true,
+            });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("打开方式失败: " + path, ex);
+            error = ex.Message;
+            return false;
+        }
+    }
+
     public static bool ShowShellProperties(string shellTarget, out string? error)
     {
         error = null;

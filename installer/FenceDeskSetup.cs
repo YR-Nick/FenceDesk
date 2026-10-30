@@ -14,14 +14,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("FenceDesk desktop fences installer")]
 [assembly: AssemblyCompany("FenceDesk")]
 [assembly: AssemblyProduct("FenceDesk")]
-[assembly: AssemblyVersion("1.3.4.0")]
-[assembly: AssemblyFileVersion("1.3.4.0")]
+[assembly: AssemblyVersion("1.3.7.0")]
+[assembly: AssemblyFileVersion("1.3.7.0")]
 
 namespace FenceDeskSetup
 {
     internal static class InstallerCore
     {
-        public const string Version = "1.3.4";
+        public const string Version = "1.3.7";
         public const string RunValueName = "FenceDesk";
 
         public static readonly string DefaultTarget =

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -47,6 +48,10 @@ public partial class MainWindow : Window
     private bool _originalDesktopMode;
     private bool _originalDesktopBusy;
     private bool _hideIconsBeforeOriginal;
+    private DateTime _showDesktopGuardUntil;
+    private bool _allowActivation;
+    private bool _desktopAttached;
+    private IntPtr _desktopHost;
     private bool _isClosing;
     private bool _closed;
     private int _zCounter;
@@ -57,6 +62,24 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        StateChanged += (_, _) =>
+        {
+            if (WindowState == WindowState.Minimized &&
+                DateTime.UtcNow < _showDesktopGuardUntil &&
+                !_isClosing && !_originalDesktopMode)
+            {
+                WindowState = WindowState.Normal;
+            }
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (!IsVisible && DateTime.UtcNow < _showDesktopGuardUntil &&
+                !_isClosing && !_originalDesktopMode)
+            {
+                Show();
+            }
+        };
 
         WorkAreaRect = SystemParameters.WorkArea;
         Left = WorkAreaRect.Left;
@@ -114,7 +137,13 @@ public partial class MainWindow : Window
 
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
-        Activated += (_, _) => Dispatcher.BeginInvoke(new Action(KeepAtBottom), DispatcherPriority.Background);
+        Activated += (_, _) =>
+        {
+            if (!_allowActivation)
+            {
+                Dispatcher.BeginInvoke(new Action(KeepAtBottom), DispatcherPriority.Background);
+            }
+        };
         Closing += OnClosing;
         Closed += OnClosed;
 
@@ -139,6 +168,7 @@ public partial class MainWindow : Window
 
         _hwndSource = HwndSource.FromHwnd(_hwnd);
         _hwndSource?.AddHook(WndProc);
+        AttachToDesktop();
         KeepAtBottom();
 
         if (!NativeMethods.RegisterHotKey(_hwnd, HotkeySearch,
@@ -554,6 +584,33 @@ public partial class MainWindow : Window
     {
         SaveSoon();
         UpdateDockVisibility();
+    }
+
+    public bool IsDesktopAttached => _desktopAttached;
+
+    public void RenameFence(FenceControl control, FenceModel model)
+    {
+        if (!InputDialog.Show("重命名围栏", "输入围栏名称", model.Title, out var title)) return;
+        if (string.Equals(model.Title, title, StringComparison.Ordinal)) return;
+        model.Title = title;
+        control.RefreshVisualState();
+        SaveSoon();
+        ShowToast("围栏已重命名");
+    }
+
+    public void BeginInteractiveInput()
+    {
+        _allowActivation = true;
+        try
+        {
+            Activate();
+            NativeMethods.SetForegroundWindow(_hwnd);
+        }
+        catch
+        {
+            // ignore foreground lock failures
+        }
+        Dispatcher.BeginInvoke(new Action(() => _allowActivation = false), DispatcherPriority.ApplicationIdle);
     }
 
     public void ShowToast(string message, int durationMs = 2400)
@@ -1077,6 +1134,110 @@ public partial class MainWindow : Window
         IconService.Invalidate(path);
     }
 
+    public async void CompressItem(FenceItemModel item)
+    {
+        if (!DesktopService.PathExists(item.Path))
+        {
+            ShowToast("文件或文件夹已不存在");
+            return;
+        }
+
+        var name = Path.GetFileName(item.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var dialog = new SaveFileDialog
+        {
+            Title = "压缩为 ZIP",
+            Filter = "ZIP 压缩包|*.zip",
+            FileName = name + ".zip",
+            DefaultExt = ".zip",
+            AddExtension = true,
+            InitialDirectory = Path.GetDirectoryName(item.Path) ?? Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            ShowToast("正在压缩…");
+            await ArchiveService.CompressAsync(item.Path, dialog.FileName);
+            ShowToast("已压缩为 " + Path.GetFileName(dialog.FileName));
+        }
+        catch (Exception ex)
+        {
+            ShowToast("压缩失败：" + ex.Message);
+            DesktopService.PlayErrorSound();
+        }
+    }
+
+    public async void ExtractItem(FenceItemModel item, bool chooseFolder)
+    {
+        if (!File.Exists(item.Path) || !ArchiveService.IsArchive(item.Path))
+        {
+            ShowToast("这个文件不是可解压的压缩包");
+            return;
+        }
+
+        var parent = Path.GetDirectoryName(item.Path) ?? Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+        var stem = ArchiveStem(item.Path);
+        string destinationParent = parent;
+
+        if (chooseFolder)
+        {
+            var dialog = new OpenFolderDialog
+            {
+                Title = "选择解压到哪个文件夹",
+                InitialDirectory = parent,
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            destinationParent = dialog.FolderName;
+        }
+
+        Directory.CreateDirectory(destinationParent);
+        var destination = UniqueDirectory(destinationParent, stem);
+
+        try
+        {
+            ShowToast("正在解压…");
+            await ArchiveService.ExtractAsync(item.Path, destination);
+            ShowToast("已解压到 " + Path.GetFileName(destination));
+            DesktopService.OpenDirectory(destination);
+        }
+        catch (Exception ex)
+        {
+            ShowToast("解压失败：" + ex.Message);
+            DesktopService.PlayErrorSound();
+        }
+    }
+
+    public void OpenWithItem(FenceItemModel item)
+    {
+        if (!DesktopService.OpenWith(item.Path, out var error))
+        {
+            ShowToast("无法打开“打开方式”：" + error);
+        }
+    }
+
+    private static string ArchiveStem(string path)
+    {
+        var name = Path.GetFileName(path);
+        if (name.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
+        {
+            return name[..^7];
+        }
+        return Path.GetFileNameWithoutExtension(name);
+    }
+
+    private static string UniqueDirectory(string parent, string stem)
+    {
+        if (string.IsNullOrWhiteSpace(stem)) stem = "解压文件";
+        var candidate = Path.Combine(parent, stem);
+        var index = 2;
+        while (Directory.Exists(candidate))
+        {
+            candidate = Path.Combine(parent, stem + " (" + index + ")");
+            index++;
+        }
+        return candidate;
+    }
+
     public void ShowItemProperties(FenceItemModel item)
     {
         if (!DesktopService.ShowProperties(item.Path, out var error))
@@ -1383,11 +1544,38 @@ public partial class MainWindow : Window
     private void HandleShowDesktopClicked()
     {
         if (_isClosing || _originalDesktopMode) return;
-        if (WindowState == WindowState.Minimized)
+        _showDesktopGuardUntil = DateTime.UtcNow.AddSeconds(2.5);
+        _ = RestoreAfterShowDesktopAsync();
+    }
+
+    private async Task RestoreAfterShowDesktopAsync()
+    {
+        // Windows 的“显示桌面”可能会把顶层窗口最小化甚至隐藏；围栏本身要保持显示。
+        for (var i = 0; i < 12; i++)
         {
-            WindowState = WindowState.Normal;
+            await Task.Delay(120);
+            if (_isClosing || _originalDesktopMode) return;
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            if (!IsVisible) Show();
+            if (!_fencesHidden)
+            {
+                FenceCanvas.Visibility = Visibility.Visible;
+                FenceCanvas.IsHitTestVisible = true;
+                Dock.Visibility = State.Settings.ShowDock ? Visibility.Visible : Visibility.Collapsed;
+                SystemIconsPanel.Visibility = State.Settings.HideDesktopIcons
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+            EnsureAboveDesktop();
         }
-        ToggleFences();
+    }
+
+    private void EnsureAboveDesktop()
+    {
+        if (_hwnd == IntPtr.Zero || _isClosing) return;
+        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOP, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE |
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
     }
 
     private bool IsDesktopOrSelfForeground()
@@ -1483,9 +1671,60 @@ public partial class MainWindow : Window
         return item;
     }
 
+    private void AttachToDesktop()
+    {
+        try
+        {
+            var defView = NativeMethods.GetDesktopListView();
+            _desktopHost = defView != IntPtr.Zero
+                ? NativeMethods.GetParent(defView)
+                : NativeMethods.FindWindow("Progman", null);
+            if (_desktopHost == IntPtr.Zero)
+            {
+                LogService.Info("桌面挂载跳过：未找到 Progman/WorkerW");
+                return;
+            }
+
+            var style = NativeMethods.GetWindowLongPtr(_hwnd, NativeMethods.GWL_STYLE).ToInt64();
+            style |= NativeMethods.WS_CHILD;
+            style &= ~NativeMethods.WS_POPUP;
+            NativeMethods.SetWindowLongPtr(_hwnd, NativeMethods.GWL_STYLE, new IntPtr(style));
+
+            var previous = NativeMethods.SetParent(_hwnd, _desktopHost);
+            if (previous == IntPtr.Zero && Marshal.GetLastWin32Error() != 0)
+            {
+                LogService.Error("桌面挂载失败: Win32=" + Marshal.GetLastWin32Error());
+                return;
+            }
+
+            NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOP, 0, 0,
+                (int)Width, (int)Height,
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW |
+                NativeMethods.SWP_FRAMECHANGED);
+            _desktopAttached = true;
+            LogService.Info("已挂载到桌面窗口: " + _desktopHost);
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("桌面挂载异常", ex);
+        }
+    }
+
     private void KeepAtBottom()
     {
         if (_hwnd == IntPtr.Zero || _isClosing) return;
+
+        if (_desktopAttached)
+        {
+            return;
+        }
+
+        // 桌面成为前台时不要把围栏沉到桌面下面，否则“显示桌面”后围栏会看不到。
+        if (NativeMethods.IsDesktopWindow(NativeMethods.GetForegroundWindow()))
+        {
+            return;
+        }
+
         NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE |
             NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
@@ -1495,6 +1734,13 @@ public partial class MainWindow : Window
     {
         switch (msg)
         {
+            case NativeMethods.WM_MOUSEACTIVATE:
+                if (!_allowActivation)
+                {
+                    handled = true;
+                    return new IntPtr(NativeMethods.MA_NOACTIVATE);
+                }
+                break;
             case NativeMethods.WM_NCHITTEST:
             {
                 if (TryGetScreenPoint(lParam, out var screenPoint))

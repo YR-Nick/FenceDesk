@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -562,7 +563,18 @@ public partial class FenceControl : UserControl
     {
         var menu = new ContextMenu();
         AddMenu(menu, "打开", () => _host.LaunchItem(item));
+        if (!Directory.Exists(item.Path))
+        {
+            AddMenu(menu, "打开方式…", () => _host.OpenWithItem(item));
+        }
         AddMenu(menu, "打开文件所在位置", () => DesktopService.RevealInExplorer(item.Path));
+        menu.Items.Add(new Separator());
+        AddMenu(menu, "压缩此文件", () => _host.CompressItem(item));
+        if (ArchiveService.IsArchive(item.Path))
+        {
+            AddMenu(menu, "解压缩到当前文件夹", () => _host.ExtractItem(item, chooseFolder: false));
+            AddMenu(menu, "解压缩到…", () => _host.ExtractItem(item, chooseFolder: true));
+        }
         menu.Items.Add(new Separator());
         AddMenu(menu, "重命名…", () => _host.RenameItem(item));
         var delete = AddMenu(menu, "删除到回收站", () => _host.DeleteItem(item));
@@ -725,7 +737,13 @@ public partial class FenceControl : UserControl
     private void BeginRename()
     {
         if (_renaming) return;
+        if (_host.IsDesktopAttached)
+        {
+            _host.RenameFence(this, _model);
+            return;
+        }
         _renaming = true;
+        _host.BeginInteractiveInput();
         RenameBox.Text = _model.Title;
         TitleText.Visibility = Visibility.Collapsed;
         RenameBox.Visibility = Visibility.Visible;
