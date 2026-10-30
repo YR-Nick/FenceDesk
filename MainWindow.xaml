@@ -1,0 +1,83 @@
+<Window x:Class="FenceDesk.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="FenceDesk 桌面围栏"
+        Icon="pack://application:,,,/Assets/FenceDesk.ico"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        MouseRightButtonUp="Window_MouseRightButtonUp">
+    <Grid x:Name="RootGrid" Background="{x:Null}">
+        <Canvas x:Name="FenceCanvas" Background="{x:Null}" ClipToBounds="True" />
+
+        <Canvas x:Name="GuideCanvas" IsHitTestVisible="False" ClipToBounds="True">
+            <Line x:Name="GuideV" Stroke="#C033D6C0" StrokeThickness="1" Visibility="Collapsed" />
+            <Line x:Name="GuideH" Stroke="#C033D6C0" StrokeThickness="1" Visibility="Collapsed" />
+        </Canvas>
+
+        <StackPanel x:Name="SystemIconsPanel" Orientation="Horizontal" HorizontalAlignment="Left"
+                    VerticalAlignment="Bottom" Margin="26,0,0,24" Visibility="Collapsed" />
+
+        <Border x:Name="Dock" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,26,22" Padding="8,7" CornerRadius="16"
+                Background="#EA0D1017" BorderBrush="#2EFFFFFF" BorderThickness="1"
+                Opacity="0.94">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="26" ShadowDepth="7" Direction="270" Opacity="0.55" Color="#000000" />
+            </Border.Effect>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Width="27" Height="27" CornerRadius="8" Background="#12FFFFFF" Margin="0,0,8,0">
+                    <Image Source="pack://application:,,,/Assets/logo.png" Width="23" Height="23"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                </Border>
+                <TextBlock Text="FenceDesk" Foreground="#EEF2F8" FontSize="12" FontWeight="SemiBold"
+                           VerticalAlignment="Center" Margin="0,0,12,0" />
+                <Border Width="1" Height="21" Background="#1CFFFFFF" Margin="0,0,7,0" />
+
+                <Button x:Name="DockAdd" Style="{StaticResource DockButton}" Click="DockAdd_Click"
+                        ToolTip="新建围栏">
+                    <TextBlock Style="{StaticResource GlyphText}" Text="&#xE710;" FontSize="15" />
+                </Button>
+                <Button x:Name="DockOrganize" Style="{StaticResource DockButton}" Click="DockOrganize_Click"
+                        ToolTip="整理桌面：把新图标按类型收纳">
+                    <TextBlock Style="{StaticResource GlyphText}" Text="&#xE8CB;" FontSize="14" />
+                </Button>
+                <Button x:Name="DockSearch" Style="{StaticResource DockButton}" Click="DockSearch_Click"
+                        ToolTip="搜索围栏  Ctrl+Alt+F">
+                    <TextBlock Style="{StaticResource GlyphText}" Text="&#xE721;" FontSize="14" />
+                </Button>
+                <Button x:Name="DockSettings" Style="{StaticResource DockButton}" Click="DockSettings_Click"
+                        ToolTip="设置">
+                    <TextBlock Style="{StaticResource GlyphText}" Text="&#xE713;" FontSize="15" />
+                </Button>
+                <Button x:Name="DockOriginalDesktop" Style="{StaticResource DockButton}"
+                        Click="DockOriginalDesktop_Click" ToolTip="切换到原桌面">
+                    <TextBlock x:Name="DockOriginalDesktopGlyph" Style="{StaticResource GlyphText}"
+                               Text="&#xE7F4;" FontSize="14" />
+                </Button>
+                <Button x:Name="DockHide" Style="{StaticResource DockButton}" Click="DockHide_Click"
+                        ToolTip="隐藏围栏  Ctrl+Alt+D">
+                    <TextBlock Style="{StaticResource GlyphText}" Text="&#xE7B3;" FontSize="15" />
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <Border x:Name="Toast" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,84" Padding="13,8" CornerRadius="10"
+                Background="#F0191D26" BorderBrush="#2AFFFFFF" BorderThickness="1"
+                Opacity="0" Visibility="Collapsed" IsHitTestVisible="False">
+            <StackPanel Orientation="Horizontal">
+                <Border Width="18" Height="18" CornerRadius="9" Background="#2633D6C0" Margin="0,0,8,0">
+                    <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                               Foreground="#33D6C0" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock x:Name="ToastText" Foreground="#E9EEF6" FontSize="11.5" VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>
