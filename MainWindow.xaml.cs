@@ -42,9 +42,13 @@ public partial class MainWindow : Window
     private MouseHook? _mouseHook;
     private SearchWindow? _search;
     private SettingsWindow? _settings;
+    private readonly Dictionary<string, Image> _systemIconImages = new();
+    private readonly Dictionary<string, TextBlock> _systemIconFallbacks = new();
+    private readonly Dictionary<string, string> _systemIconSources = new();
 
     private bool _initialized;
     private bool _fencesHidden;
+    private bool _recycleBinBusy;
     private bool _originalDesktopMode;
     private bool _originalDesktopBusy;
     private bool _hideIconsBeforeOriginal;
@@ -237,7 +241,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             LogService.Error("初始化桌面围栏失败", ex);
-            MessageBox.Show(this, "桌面围栏初始化失败：\n" + ex.Message, "FenceDesk",
+            MessageBox.Show( "桌面围栏初始化失败：\n" + ex.Message, "FenceDesk",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -326,7 +330,27 @@ public partial class MainWindow : Window
         button.Click += (_, _) => OpenSystemShellItem(shellTarget);
         SystemIconsPanel.Children.Add(button);
 
+        _systemIconImages[label] = image;
+        _systemIconFallbacks[label] = fallback;
+        _systemIconSources[label] = iconSource;
         _ = LoadSystemIconAsync(iconSource, image, fallback);
+    }
+
+    private async Task RefreshSystemIconAsync(string label)
+    {
+        if (!_systemIconImages.TryGetValue(label, out var image) ||
+            !_systemIconFallbacks.TryGetValue(label, out var fallback) ||
+            !_systemIconSources.TryGetValue(label, out var source))
+        {
+            return;
+        }
+
+        IconService.InvalidateShell(source);
+        await Task.Delay(220);
+        var icon = await IconService.GetShellIconAsync(source);
+        if (icon is null) return;
+        image.Source = icon;
+        fallback.Visibility = Visibility.Collapsed;
     }
 
     private ContextMenu BuildSystemIconMenu(string label, string shellTarget)
@@ -404,21 +428,37 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ClearRecycleBin()
+    private async void ClearRecycleBin()
     {
-        var result = MessageBox.Show(this,
-            "确定清空回收站吗？\n\n回收站中的文件将被永久删除。",
-            "FenceDesk", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-        if (result != MessageBoxResult.Yes) return;
+        if (_recycleBinBusy) return;
 
-        if (DesktopService.EmptyRecycleBin(out var error))
+        var result = ConfirmWindow.Ask("清空回收站",
+            "确定清空回收站吗？\n\n回收站中的文件将被永久删除。", "清空", "取消");
+        if (!result) return;
+
+        _recycleBinBusy = true;
+        try
         {
-            ShowToast("回收站已清空");
+            ShowToast("正在清空回收站…");
+            var emptyResult = await Task.Run(RecycleBinService.Empty);
+            ShowToast(emptyResult == RecycleBinEmptyResult.AlreadyEmpty
+                ? "回收站已经是空的"
+                : "回收站已清空");
+
+            for (var i = 0; i < 3; i++)
+            {
+                await RefreshSystemIconAsync("回收站");
+                await Task.Delay(240);
+            }
         }
-        else
+        catch (Exception ex)
         {
-            ShowToast("清空回收站失败：" + error);
+            ShowToast("清空回收站失败：" + ex.Message);
             DesktopService.PlayErrorSound();
+        }
+        finally
+        {
+            _recycleBinBusy = false;
         }
     }
 
@@ -1092,10 +1132,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        var result = MessageBox.Show(this,
-            $"将「{item.DisplayName}」移到回收站？\n\n文件会进入回收站，不会立即永久删除。",
-            "FenceDesk", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-        if (result != MessageBoxResult.Yes) return;
+        var result = ConfirmWindow.Ask("删除到回收站",
+            $"将「{item.DisplayName}」移到回收站？\n\n文件会进入回收站，不会立即永久删除。", "删除", "取消");
+        if (!result) return;
 
         var oldPath = item.Path;
         if (!DesktopService.DeleteToRecycleBin(oldPath, out var error))
@@ -1303,9 +1342,8 @@ public partial class MainWindow : Window
         var message = fence.IsPortal
             ? $"删除「{fence.Title}」门户围栏？\n只会移除围栏，不会删除文件夹里的任何内容。"
             : $"删除「{fence.Title}」？\n围栏里的文件不会被删除。";
-        var result = MessageBox.Show(this, message, "FenceDesk", MessageBoxButton.YesNo,
-            MessageBoxImage.Question, MessageBoxResult.No);
-        if (result != MessageBoxResult.Yes) return;
+        var result = ConfirmWindow.Ask("删除围栏", message, "删除", "取消");
+        if (!result) return;
 
         StopPortal(fence.Id);
         _fences.Remove(fence.Id);
@@ -1953,10 +1991,9 @@ public partial class MainWindow : Window
 
     public void ResetLayout()
     {
-        var result = MessageBox.Show(this,
-            "重新扫描桌面并按类型重建所有围栏？\n当前围栏布局会被替换，桌面文件不会被移动或删除。",
-            "FenceDesk", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-        if (result != MessageBoxResult.Yes) return;
+        var result = ConfirmWindow.Ask("重新扫描桌面",
+            "重新扫描桌面并按类型重建所有围栏？\n当前围栏布局会被替换，桌面文件不会被移动或删除。", "重建", "取消");
+        if (!result) return;
 
         var fresh = LayoutService.CreateInitialState(WorkAreaRect,
             DesktopService.EnumerateDesktopItems(State.Settings.IncludeHiddenDesktopItems));

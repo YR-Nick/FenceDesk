@@ -50,6 +50,14 @@ public static class IconService
             () => RunOnStaAsync(() => LoadShellCore(p)), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 
+    public static void InvalidateShell(string parsingName)
+    {
+        if (!string.IsNullOrWhiteSpace(parsingName))
+        {
+            ShellCache.TryRemove(parsingName.Trim(), out _);
+        }
+    }
+
     public static void Invalidate(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;

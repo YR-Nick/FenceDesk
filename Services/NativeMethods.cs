@@ -67,6 +67,11 @@ internal static class NativeMethods
     public const uint SHERB_NOPROGRESSUI = 0x00000002;
     public const uint SHERB_NOSOUND = 0x00000004;
 
+    public const int SHCNE_UPDATEDIR = 0x00001000;
+    public const int SHCNE_ASSOCCHANGED = 0x08000000;
+    public const uint SHCNF_PATHW = 0x0005;
+    public const uint SHCNF_IDLIST = 0x0000;
+
     [StructLayout(LayoutKind.Sequential)]
     public struct SHFILEOPSTRUCT
     {
@@ -258,6 +263,17 @@ internal static class NativeMethods
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     public static extern int SHEmptyRecycleBin(IntPtr hwnd, string? pszRootPath, uint dwFlags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SHQUERYRBINFO
+    {
+        public uint cbSize;
+        public long i64Size;
+        public long i64NumItems;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern int SHQueryRecycleBin(string? pszRootPath, ref SHQUERYRBINFO pSHQueryRBInfo);
 
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
