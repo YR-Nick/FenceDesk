@@ -35,6 +35,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _toastTimer;
     private readonly DispatcherTimer _desktopScanTimer;
     private readonly DispatcherTimer _zOrderTimer;
+    private readonly DispatcherTimer _desktopGuardTimer;
 
     private HwndSource? _hwndSource;
     private IntPtr _hwnd;
@@ -139,6 +140,12 @@ public partial class MainWindow : Window
         _zOrderTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
         _zOrderTimer.Tick += (_, _) => KeepAtBottom();
 
+        // 桌面子窗口的 z-order 会被 Explorer 的 SHELLDLL_DefView 改变，
+        // 定期把自己提回 WorkerW 的顶层，否则围栏看起来在、鼠标却点到桌面。
+        _desktopGuardTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+        _desktopGuardTimer.Tick += (_, _) => EnsureAboveDesktop();
+        _desktopGuardTimer.Start();
+
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
         Activated += (_, _) =>
@@ -148,6 +155,8 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(new Action(KeepAtBottom), DispatcherPriority.Background);
             }
         };
+        Deactivated += (_, _) =>
+            Dispatcher.BeginInvoke(new Action(EnsureAboveDesktop), DispatcherPriority.Background);
         Closing += OnClosing;
         Closed += OnClosed;
 
@@ -434,6 +443,7 @@ public partial class MainWindow : Window
 
         var result = ConfirmWindow.Ask("清空回收站",
             "确定清空回收站吗？\n\n回收站中的文件将被永久删除。", "清空", "取消");
+        EnsureInteractiveState();
         if (!result) return;
 
         _recycleBinBusy = true;
@@ -794,7 +804,11 @@ public partial class MainWindow : Window
         }
 
         _search = new SearchWindow(this, results);
-        _search.Closed += (_, _) => _search = null;
+        _search.Closed += (_, _) =>
+        {
+            _search = null;
+            Dispatcher.BeginInvoke(new Action(EnsureAboveDesktop), DispatcherPriority.Background);
+        };
         _search.Show();
         _search.Activate();
         _search.FocusQuery();
@@ -1134,6 +1148,7 @@ public partial class MainWindow : Window
 
         var result = ConfirmWindow.Ask("删除到回收站",
             $"将「{item.DisplayName}」移到回收站？\n\n文件会进入回收站，不会立即永久删除。", "删除", "取消");
+        EnsureInteractiveState();
         if (!result) return;
 
         var oldPath = item.Path;
@@ -1343,6 +1358,7 @@ public partial class MainWindow : Window
             ? $"删除「{fence.Title}」门户围栏？\n只会移除围栏，不会删除文件夹里的任何内容。"
             : $"删除「{fence.Title}」？\n围栏里的文件不会被删除。";
         var result = ConfirmWindow.Ask("删除围栏", message, "删除", "取消");
+        EnsureInteractiveState();
         if (!result) return;
 
         StopPortal(fence.Id);
@@ -1616,6 +1632,12 @@ public partial class MainWindow : Window
             NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
     }
 
+    private void EnsureInteractiveState()
+    {
+        Mouse.Capture(null);
+        EnsureAboveDesktop();
+    }
+
     private bool IsDesktopOrSelfForeground()
     {
         var foreground = NativeMethods.GetForegroundWindow();
@@ -1754,6 +1776,7 @@ public partial class MainWindow : Window
 
         if (_desktopAttached)
         {
+            EnsureAboveDesktop();
             return;
         }
 
@@ -1773,7 +1796,7 @@ public partial class MainWindow : Window
         switch (msg)
         {
             case NativeMethods.WM_MOUSEACTIVATE:
-                if (!_allowActivation)
+                if (!_desktopAttached && !_allowActivation)
                 {
                     handled = true;
                     return new IntPtr(NativeMethods.MA_NOACTIVATE);
@@ -1993,6 +2016,7 @@ public partial class MainWindow : Window
     {
         var result = ConfirmWindow.Ask("重新扫描桌面",
             "重新扫描桌面并按类型重建所有围栏？\n当前围栏布局会被替换，桌面文件不会被移动或删除。", "重建", "取消");
+        EnsureInteractiveState();
         if (!result) return;
 
         var fresh = LayoutService.CreateInitialState(WorkAreaRect,

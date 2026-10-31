@@ -4,7 +4,7 @@
 
 > 桌面文件都留在原来的位置。FenceDesk 只保存「引用」，不会自动移动、重命名或删除你的文件；只有你主动使用右键菜单中的「重命名」「删除到回收站」时才会修改文件。
 
-当前版本 **1.3.9**：修复回收站图标不刷新、空回收站报错和清空后围栏卡顿；确认框改为高对比度深色窗口。
+当前版本 **1.3.10**：修复清空回收站、打开搜索、切回桌面后围栏偶发失去鼠标响应的问题；桌面 z-order 守卫会持续保持围栏可点击。
 
 ![FenceDesk 主界面](docs/screenshot-main.png)
 
@@ -90,7 +90,7 @@ HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run
 
 安装步骤：
 
-1. **先把整个发布包解压/复制到普通目录**，例如桌面或 `C:\Temp\FenceDesk-1.3.9`。
+1. **先把整个发布包解压/复制到普通目录**，例如桌面或 `C:\Temp\FenceDesk-1.3.10`。
    - 不要直接在 `D:\项目` 里运行安装程序。该工作区目录带有低完整性标签，exe 会以低权限运行，无法写启动项。
 2. 双击 `FenceDeskSetup.exe`。
 3. 如果系统启用 UAC，确认管理员授权；如果 UAC 已关闭，会直接以管理员权限运行。
@@ -161,7 +161,7 @@ dotnet run --project .\FenceDesk.csproj
 .\publish.ps1
 ```
 
-产物位于 `publish\win-x64\FenceDesk.exe`，压缩包位于 `dist\FenceDesk-v1.3.9-win-x64.zip`。发布目录包含 exe 与 5 个 WPF 原生 DLL，请保持它们在同一目录。
+产物位于 `publish\win-x64\FenceDesk.exe`，压缩包位于 `dist\FenceDesk-v1.3.10-win-x64.zip`。发布目录包含 exe 与 5 个 WPF 原生 DLL，请保持它们在同一目录。
 
 也可以手工执行：
 
