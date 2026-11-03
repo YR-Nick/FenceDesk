@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -23,6 +24,38 @@ public partial class App : Application
             LogService.Info("提权设置开机启动：" + (ok ? "成功" : "失败 " + helperError));
             Shutdown(ok ? 0 : 1);
             return;
+        }
+
+        var elevatedRestartMarker = Path.Combine(AppPaths.DataDirectory, "elevated-restart.flag");
+        var fromElevatedRestart = File.Exists(elevatedRestartMarker);
+        if (fromElevatedRestart)
+        {
+            try { File.Delete(elevatedRestartMarker); } catch { }
+        }
+
+        if (!fromElevatedRestart && DesktopService.IsProcessElevated())
+        {
+            try
+            {
+                var exe = Environment.ProcessPath;
+                if (!string.IsNullOrWhiteSpace(exe))
+                {
+                    File.WriteAllText(elevatedRestartMarker, "1");
+                    LogService.Info("检测到管理员启动，尝试通过 Explorer 以普通权限重启");
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"\"{exe}\"",
+                        UseShellExecute = true,
+                    });
+                    Shutdown();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("普通权限重启失败，继续以管理员运行", ex);
+            }
         }
 
         _instanceMutex = new Mutex(true, @"Local\FenceDesk.DesktopFences.1.0", out var isFirstInstance);

@@ -14,14 +14,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("FenceDesk desktop fences installer")]
 [assembly: AssemblyCompany("FenceDesk")]
 [assembly: AssemblyProduct("FenceDesk")]
-[assembly: AssemblyVersion("1.3.10.0")]
-[assembly: AssemblyFileVersion("1.3.10.0")]
+[assembly: AssemblyVersion("1.3.22.0")]
+[assembly: AssemblyFileVersion("1.3.22.0")]
 
 namespace FenceDeskSetup
 {
     internal static class InstallerCore
     {
-        public const string Version = "1.3.10";
+        public const string Version = "1.3.22";
         public const string RunValueName = "FenceDesk";
 
         public static readonly string DefaultTarget =
@@ -108,8 +108,8 @@ namespace FenceDeskSetup
                 {
                     Process.Start(new ProcessStartInfo
                     {
-                        FileName = installedExe,
-                        WorkingDirectory = target,
+                        FileName = "explorer.exe",
+                        Arguments = "\"" + installedExe + "\"",
                         UseShellExecute = true
                     });
                 }

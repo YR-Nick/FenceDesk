@@ -44,6 +44,7 @@ public sealed class AppSettings
     public int IconSize { get; set; } = 42;
     public bool HasInitialized { get; set; }
     public bool WelcomeShown { get; set; }
+    public int SettingsMigrationVersion { get; set; }
 }
 
 public sealed class FenceModel : ObservableObject

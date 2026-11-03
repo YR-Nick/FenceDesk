@@ -567,7 +567,7 @@ public partial class FenceControl : UserControl
         {
             AddMenu(menu, "打开方式…", () => _host.OpenWithItem(item));
         }
-        AddMenu(menu, "打开文件所在位置", () => DesktopService.RevealInExplorer(item.Path));
+        AddMenu(menu, "打开文件所在位置", () => DesktopService.RevealItemLocation(item.Path));
         menu.Items.Add(new Separator());
         AddMenu(menu, "压缩此文件", () => _host.CompressItem(item));
         if (ArchiveService.IsArchive(item.Path))

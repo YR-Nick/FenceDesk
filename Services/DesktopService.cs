@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using Microsoft.Win32;
 
 namespace FenceDesk.Services;
@@ -122,14 +123,39 @@ public static class DesktopService
 
         try
         {
-            Process.Start(new ProcessStartInfo
+            var isShortcut = path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
+                             path.EndsWith(".url", StringComparison.OrdinalIgnoreCase);
+            var elevated = IsProcessElevated();
+
+            // 管理员运行时不要直接把子进程也提权；交给 Explorer 以普通权限启动。
+            // 普通运行时使用桌面双击同样的 ShellExecute 路径，速度最快、兼容性最好。
+            if (elevated)
+            {
+                LogService.Info("以 Explorer 启动（FenceDesk 管理员）: " + path);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"\"{path}\"",
+                    UseShellExecute = true,
+                });
+                return true;
+            }
+
+            var info = new ProcessStartInfo
             {
                 FileName = path,
                 UseShellExecute = true,
-                WorkingDirectory = Directory.Exists(path)
+            };
+            if (!isShortcut)
+            {
+                info.WorkingDirectory = Directory.Exists(path)
                     ? path
-                    : Path.GetDirectoryName(path) ?? Environment.CurrentDirectory,
-            });
+                    : Path.GetDirectoryName(path) ?? Environment.CurrentDirectory;
+            }
+
+            LogService.Info("启动: " + path);
+            var process = Process.Start(info);
+            TryBringToForeground(process);
             return true;
         }
         catch (Exception ex)
@@ -137,6 +163,60 @@ public static class DesktopService
             LogService.Error("启动失败: " + path, ex);
             error = ex.Message;
             return false;
+        }
+    }
+
+    public static bool IsProcessElevated()
+    {
+        try
+        {
+            if (!NativeMethods.OpenProcessToken(NativeMethods.GetCurrentProcess(), 0x0008, out var token))
+            {
+                return false;
+            }
+
+            try
+            {
+                return NativeMethods.GetTokenInformation(token, 20, out var elevated, 4, out _) && elevated != 0;
+            }
+            finally
+            {
+                NativeMethods.CloseHandle(token);
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void TryBringToForeground(Process? process)
+    {
+        if (process is null) return;
+
+        // 从桌面围栏启动时，FenceDesk 不是前台进程，新应用窗口可能被前台锁挡在后面。
+        // 等窗口创建后主动恢复并置前，避免“任务管理器有进程但看不到界面”。
+        for (var i = 0; i < 25; i++)
+        {
+            try
+            {
+                process.Refresh();
+                if (process.HasExited) return;
+                var handle = process.MainWindowHandle;
+                if (handle != IntPtr.Zero)
+                {
+                    NativeMethods.ShowWindow(handle, 9);
+                    NativeMethods.SetForegroundWindow(handle);
+                    LogService.Info("已将启动窗口置前: " + process.ProcessName);
+                    return;
+                }
+            }
+            catch
+            {
+                // ignore and retry
+            }
+
+            Thread.Sleep(120);
         }
     }
 
@@ -157,6 +237,52 @@ public static class DesktopService
         {
             LogService.Error("打开资源管理器失败", ex);
         }
+    }
+
+    public static void RefreshDesktopSurface(out string? error)
+    {
+        error = null;
+        try
+        {
+            string? wallpaper = null;
+            using (var key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop"))
+            {
+                wallpaper = key?.GetValue("Wallpaper") as string;
+            }
+
+            if (!string.IsNullOrWhiteSpace(wallpaper) && File.Exists(wallpaper))
+            {
+                // SPI_SETDESKWALLPAPER + SPIF_SENDCHANGE 让 Explorer 重新绘制当前壁纸，
+                // 修复全屏应用退出后留下的黑屏/壁纸不刷新。
+                NativeMethods.SystemParametersInfo(20, 0, wallpaper, 2);
+            }
+
+            NativeMethods.DwmFlush();
+            NativeMethods.RedrawWindow(NativeMethods.GetDesktopWindow(), IntPtr.Zero, IntPtr.Zero, 0x0185);
+            LogService.Info("已请求刷新桌面壁纸");
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            LogService.Error("刷新桌面壁纸失败", ex);
+        }
+    }
+
+    public static void RevealItemLocation(string path)
+    {
+        // Windows 桌面右键快捷方式的“打开文件所在位置”是打开目标程序的安装目录，
+        // 不是快捷方式本身所在的桌面/开始菜单目录。
+        if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+        {
+            var target = ResolveShortcutTarget(path);
+            if (!string.IsNullOrWhiteSpace(target))
+            {
+                RevealInExplorer(target);
+                return;
+            }
+        }
+
+        RevealInExplorer(path);
     }
 
     public static void OpenDirectory(string path)
@@ -507,9 +633,11 @@ public static class DesktopService
 
     public static void RestoreIconsIfOwned()
     {
-        bool owned;
-        lock (IconGate) owned = _ownsHiddenIcons;
-        if (!owned) return;
+        // 只要图标处于隐藏状态，退出/异常恢复时都强制恢复可见。
+        // 不再依赖 _ownsHiddenIcons：崩溃或状态文件丢失时它可能已经不可靠，
+        // 结果就是 HideIcons=1 残留、桌面一直空白。
+        if (!AreDesktopIconsHidden()) return;
+        LogService.Info("退出恢复：强制显示桌面图标");
         SetDesktopIconsHidden(false, takeOwnership: false);
     }
 

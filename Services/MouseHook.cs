@@ -16,6 +16,7 @@ public sealed class MouseHook : IDisposable
     private bool _disposed;
 
     public event Action<Point>? PossibleDesktopDoubleClick;
+    public event Action<Point>? LeftButtonDown;
     public event Action? ShowDesktopClicked;
 
     public MouseHook()
@@ -47,6 +48,9 @@ public sealed class MouseHook : IDisposable
                 }
                 else
                 {
+                    // 在 Windows 把这次点击派发出去之前，先把桌面子窗口提到顶层。
+                    LeftButtonDown?.Invoke(new Point(data.pt.X, data.pt.Y));
+
                     var now = Environment.TickCount64;
                     var threshold = Math.Max(250, NativeMethods.GetDoubleClickTime());
                     var dx = data.pt.X - _lastClickPoint.X;

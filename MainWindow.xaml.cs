@@ -26,6 +26,7 @@ public partial class MainWindow : Window
 
     private readonly WorkspaceStore _store = new();
     private readonly Dictionary<string, FenceControl> _fences = new();
+    private readonly HashSet<string> _launchingPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FileSystemWatcher> _portalWatchers = new();
     private readonly Dictionary<string, DispatcherTimer> _portalTimers = new();
     private readonly List<FileSystemWatcher> _desktopWatchers = new();
@@ -57,6 +58,9 @@ public partial class MainWindow : Window
     private bool _allowActivation;
     private bool _desktopAttached;
     private IntPtr _desktopHost;
+    private IntPtr _lastForegroundWindow;
+    private DateTime _lastGuardTick;
+    private DateTime _lastDesktopRefreshUtc;
     private bool _isClosing;
     private bool _closed;
     private int _zCounter;
@@ -108,6 +112,22 @@ public partial class MainWindow : Window
             State.Settings.LaunchAtLogin = DesktopService.IsAutoStartEnabled();
         }
 
+        if (State.Settings.SettingsMigrationVersion < 1)
+        {
+            // 1.3.18 的启动恢复曾把 HideDesktopIcons 误写成 false，导致桌面图标
+            // 和围栏同时显示。这里做一次性迁移；用户之后仍可在设置里关闭。
+            if (State.Settings.HasInitialized &&
+                !State.Settings.HideDesktopIcons &&
+                !State.Settings.OwnsHiddenIcons &&
+                State.Fences.Count > 0)
+            {
+                State.Settings.HideDesktopIcons = true;
+            }
+
+            State.Settings.SettingsMigrationVersion = 1;
+            _store.Save(State);
+        }
+
         _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
         _saveTimer.Tick += (_, _) =>
         {
@@ -143,8 +163,14 @@ public partial class MainWindow : Window
         // 桌面子窗口的 z-order 会被 Explorer 的 SHELLDLL_DefView 改变，
         // 定期把自己提回 WorkerW 的顶层，否则围栏看起来在、鼠标却点到桌面。
         _desktopGuardTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
-        _desktopGuardTimer.Tick += (_, _) => EnsureAboveDesktop();
+        _desktopGuardTimer.Tick += (_, _) =>
+        {
+            EnsureAboveDesktop();
+            CheckDesktopSurfaceRefresh();
+        };
         _desktopGuardTimer.Start();
+        _lastGuardTick = DateTime.UtcNow;
+        _lastDesktopRefreshUtc = DateTime.UtcNow;
 
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
@@ -183,6 +209,7 @@ public partial class MainWindow : Window
         _hwndSource?.AddHook(WndProc);
         AttachToDesktop();
         KeepAtBottom();
+        LogService.Info("进程提权状态: " + (DesktopService.IsProcessElevated() ? "管理员" : "普通用户"));
 
         if (!NativeMethods.RegisterHotKey(_hwnd, HotkeySearch,
                 NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT, 0x46))
@@ -220,6 +247,18 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(new Action(() => HandleDesktopDoubleClick(screenPoint)));
             _mouseHook.ShowDesktopClicked += () =>
                 Dispatcher.BeginInvoke(new Action(HandleShowDesktopClicked));
+            _mouseHook.LeftButtonDown += point =>
+            {
+                if (!_desktopAttached) return;
+                try
+                {
+                    Dispatcher.Invoke(new Action(() => PrepareMouseClick(point)), DispatcherPriority.Send);
+                }
+                catch
+                {
+                    // 关闭过程中忽略
+                }
+            };
 
             SetupDesktopWatchers();
             _zOrderTimer.Start();
@@ -1059,17 +1098,62 @@ public partial class MainWindow : Window
         ShowToast("已从围栏中移除，桌面文件不会被删除");
     }
 
-    public void LaunchItem(FenceItemModel item)
+    public async void LaunchItem(FenceItemModel item)
     {
-        if (DesktopService.Launch(item.Path, out var error))
-        {
-            item.IsMissing = false;
-            return;
-        }
+        var path = item.Path;
+        if (string.IsNullOrWhiteSpace(path) || !_launchingPaths.Add(path)) return;
 
-        item.IsMissing = true;
-        ShowToast("无法打开「" + item.DisplayName + "」" + (string.IsNullOrWhiteSpace(error) ? "" : "：" + error));
-        DesktopService.PlayErrorSound();
+        try
+        {
+            var (ok, error) = await RunOnStaThreadAsync(() =>
+            {
+                var launched = DesktopService.Launch(path, out var launchError);
+                return (launched, launchError);
+            });
+
+            if (ok)
+            {
+                item.IsMissing = false;
+                return;
+            }
+
+            item.IsMissing = true;
+            ShowToast("无法打开「" + item.DisplayName + "」" + (string.IsNullOrWhiteSpace(error) ? "" : "：" + error));
+            DesktopService.PlayErrorSound();
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("启动失败: " + path, ex);
+            ShowToast("无法打开「" + item.DisplayName + "」");
+        }
+        finally
+        {
+            await Task.Delay(650);
+            _launchingPaths.Remove(path);
+        }
+    }
+
+    private static Task<T> RunOnStaThreadAsync<T>(Func<T> action)
+    {
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                completion.SetResult(action());
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "FenceDesk launch",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task;
     }
 
     public void RenameItem(FenceItemModel item)
@@ -1589,7 +1673,7 @@ public partial class MainWindow : Window
 
     private void HandleDesktopDoubleClick(Point screenPoint)
     {
-        if (_isClosing || !State.Settings.DoubleClickHide) return;
+        if (_isClosing || _originalDesktopMode || !State.Settings.DoubleClickHide) return;
         if (!IsDesktopOrSelfForeground()) return;
         if (IsPointOnFenceOrDock(screenPoint)) return;
         ToggleFences();
@@ -1627,15 +1711,123 @@ public partial class MainWindow : Window
     private void EnsureAboveDesktop()
     {
         if (_hwnd == IntPtr.Zero || _isClosing) return;
+
+        if (_desktopAttached)
+        {
+            EnsureDesktopHost();
+        }
+
+        if (!NativeMethods.IsWindowVisible(_hwnd))
+        {
+            NativeMethods.ShowWindow(_hwnd, 5);
+        }
+
         NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOP, 0, 0, 0, 0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE |
-            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER |
+            NativeMethods.SWP_SHOWWINDOW);
+    }
+
+    private void EnsureDesktopHost()
+    {
+        if (_hwnd == IntPtr.Zero || _isClosing) return;
+
+        var defView = NativeMethods.GetDesktopListView();
+        if (defView == IntPtr.Zero) return;
+        var host = NativeMethods.GetParent(defView);
+        if (host == IntPtr.Zero || !NativeMethods.IsWindow(host)) return;
+
+        var currentParent = NativeMethods.GetParent(_hwnd);
+        if (currentParent == host) return;
+
+        // Explorer 在“显示桌面”、切换桌面等操作后会重建 WorkerW。
+        // 原宿主销毁后围栏会变成不可点击的孤儿子窗口，必须重新挂载。
+        LogService.Info("桌面宿主变化，重新挂载: " + currentParent + " -> " + host);
+        AttachToDesktop();
+    }
+
+    private void CheckDesktopSurfaceRefresh()
+    {
+        var now = DateTime.UtcNow;
+        var gap = now - _lastGuardTick;
+        _lastGuardTick = now;
+
+        var foreground = NativeMethods.GetForegroundWindow();
+        var foregroundChanged = foreground != _lastForegroundWindow;
+        _lastForegroundWindow = foreground;
+
+        var desktopVisible = foreground == _hwnd || NativeMethods.IsDesktopWindow(foreground);
+        var uiWasStalled = gap > TimeSpan.FromSeconds(2);
+        if (!desktopVisible) return;
+        if (!foregroundChanged && !uiWasStalled) return;
+        if (now - _lastDesktopRefreshUtc < TimeSpan.FromSeconds(2)) return;
+
+        _lastDesktopRefreshUtc = now;
+        LogService.Info(uiWasStalled
+            ? "检测到界面短暂停顿，刷新桌面壁纸"
+            : "检测到桌面重新成为前台，刷新桌面壁纸");
+        _ = RefreshDesktopSurfaceAsync();
+    }
+
+    private async Task RefreshDesktopSurfaceAsync()
+    {
+        await Task.Run(() => DesktopService.RefreshDesktopSurface(out _));
+        if (_isClosing) return;
+        InvalidateVisual();
+        FenceCanvas.InvalidateVisual();
     }
 
     private void EnsureInteractiveState()
     {
         Mouse.Capture(null);
         EnsureAboveDesktop();
+    }
+
+    private void PrepareMouseClick(Point screenPoint)
+    {
+        if (_isClosing || !ShouldPrepareMouseClick(screenPoint)) return;
+
+        if (!IsEnabled)
+        {
+            Mouse.Capture(null);
+        }
+
+        EnsureAboveDesktop();
+
+        if (IsEnabled) return;
+        var modalOpen = Application.Current.Windows.OfType<Window>().Any(w =>
+            w != this && w.IsVisible && (w is ConfirmWindow || w is InputDialog));
+        if (!modalOpen)
+        {
+            LogService.Info("鼠标点击前恢复主窗口交互状态");
+            IsEnabled = true;
+        }
+    }
+
+    private bool ShouldPrepareMouseClick(Point screenPoint)
+    {
+        try
+        {
+            var hwnd = NativeMethods.WindowFromPoint(new NativeMethods.POINT(
+                (int)Math.Round(screenPoint.X), (int)Math.Round(screenPoint.Y)));
+            if (hwnd == IntPtr.Zero) return false;
+
+            NativeMethods.GetWindowThreadProcessId(hwnd, out var processId);
+            if (processId == (uint)Environment.ProcessId)
+            {
+                // 围栏本身已经是最上层且可用时，不要在点击前做任何 z-order/捕获操作。
+                // 只有窗口被禁用时才需要恢复；右键菜单等弹窗一律跳过。
+                return hwnd == _hwnd && !IsEnabled;
+            }
+
+            var root = NativeMethods.GetAncestor(hwnd, 2);
+            return NativeMethods.IsDesktopWindow(hwnd) ||
+                   (root != IntPtr.Zero && NativeMethods.IsDesktopWindow(root));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private bool IsDesktopOrSelfForeground()
@@ -1892,7 +2084,18 @@ public partial class MainWindow : Window
         await Task.Delay(250);
         if (_isClosing) return;
 
-        if (State.Settings.HideDesktopIcons)
+        var wantHidden = State.Settings.HideDesktopIcons;
+
+        if (DesktopService.AreDesktopIconsHidden())
+        {
+            // 只恢复图标，不修改用户的 HideDesktopIcons 设置。
+            LogService.Info("启动恢复桌面图标可见状态");
+            await Task.Run(() => DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 1800));
+            State.Settings.OwnsHiddenIcons = false;
+            SaveSoon();
+        }
+
+        if (wantHidden)
         {
             if (DesktopService.AreDesktopIconsHidden())
             {
