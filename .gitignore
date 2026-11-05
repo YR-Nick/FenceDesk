@@ -14,5 +14,6 @@ docs/*.tmp.png
 *.rar
 *.pdb
 *.log
+*_wpftmp.csproj
 Thumbs.db
 .DS_Store

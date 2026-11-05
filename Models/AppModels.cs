@@ -111,6 +111,13 @@ public sealed class FenceModel : ObservableObject
         set => Set(ref _locked, value);
     }
 
+    /// <summary>隐藏围栏：不在桌面画布上渲染，只能通过隐藏围栏入口打开。</summary>
+    public bool IsHidden { get; set; }
+
+    public string? HiddenPasswordHash { get; set; }
+
+    public string? HiddenPasswordSalt { get; set; }
+
     /// <summary>分类键，用于“整理桌面”时自动找到对应的围栏。手动创建的围栏为 null。</summary>
     public string? CategoryKey
     {
@@ -211,6 +218,9 @@ public sealed class FenceItemModel : ObservableObject
         get => _arguments;
         set => Set(ref _arguments, value);
     }
+
+    /// <summary>加入隐藏围栏之前是否已经是隐藏属性，取消隐藏时据此恢复。</summary>
+    public bool WasHidden { get; set; }
 
     [JsonIgnore]
     public bool IsDirectory

@@ -26,6 +26,15 @@ public partial class App : Application
             return;
         }
 
+        var hiddenIndex = Array.FindIndex(e.Args,
+            a => a.Equals("--add-hidden", StringComparison.OrdinalIgnoreCase));
+        if (hiddenIndex >= 0 && hiddenIndex + 1 < e.Args.Length)
+        {
+            HiddenVaultService.EnqueueRequest(e.Args[hiddenIndex + 1]);
+        }
+
+        HiddenVaultService.RegisterExplorerMenu();
+
         var elevatedRestartMarker = Path.Combine(AppPaths.DataDirectory, "elevated-restart.flag");
         var fromElevatedRestart = File.Exists(elevatedRestartMarker);
         if (fromElevatedRestart)

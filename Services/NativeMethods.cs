@@ -37,6 +37,7 @@ internal static class NativeMethods
     public const uint MOD_NOREPEAT = 0x4000;
 
     public const int WH_MOUSE_LL = 14;
+    public const int WH_KEYBOARD_LL = 13;
     public const int HC_ACTION = 0;
 
     public const uint SHGFI_ICON = 0x000000100;
@@ -162,6 +163,25 @@ internal static class NativeMethods
     }
 
     public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode;
+        public uint scanCode;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [DllImport("user32.dll")]
+    public static extern short GetKeyState(int nVirtKey);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowsHookExW")]
+    public static extern IntPtr SetWindowsHookExKeyboard(int idHook, LowLevelKeyboardProc lpfn,
+        IntPtr hMod, uint dwThreadId);
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
@@ -182,6 +202,9 @@ internal static class NativeMethods
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     public static extern IntPtr SendMessageTimeout(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam,
         uint flags, uint timeout, out IntPtr result);
+
+    [DllImport("user32.dll")]
+    public static extern bool ReleaseCapture();
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();

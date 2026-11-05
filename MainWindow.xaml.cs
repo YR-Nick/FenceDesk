@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Collections.Specialized;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -35,6 +36,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _saveTimer;
     private readonly DispatcherTimer _toastTimer;
     private readonly DispatcherTimer _desktopScanTimer;
+    private readonly DispatcherTimer _desktopReconcileTimer;
+    private readonly DispatcherTimer _hiddenRequestTimer;
     private readonly DispatcherTimer _zOrderTimer;
     private readonly DispatcherTimer _desktopGuardTimer;
 
@@ -42,6 +45,9 @@ public partial class MainWindow : Window
     private IntPtr _hwnd;
     private TrayService? _tray;
     private MouseHook? _mouseHook;
+    private KeyboardHook? _keyboardHook;
+    private FenceControl? _selectedFence;
+    private FenceItemModel? _selectedItem;
     private SearchWindow? _search;
     private SettingsWindow? _settings;
     private readonly Dictionary<string, Image> _systemIconImages = new();
@@ -157,6 +163,19 @@ public partial class MainWindow : Window
             }
         };
 
+        _hiddenRequestTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _hiddenRequestTimer.Tick += (_, _) => ProcessHiddenRequests();
+        _hiddenRequestTimer.Start();
+
+        _desktopReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        _desktopReconcileTimer.Tick += (_, _) =>
+        {
+            if (_isClosing || !_initialized || !State.Settings.AutoImportNew) return;
+            var added = ImportNewDesktopItems(silent: true);
+            if (added > 0) LogService.Info($"周期扫描补充收纳 {added} 个桌面项目");
+        };
+        _desktopReconcileTimer.Start();
+
         _zOrderTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
         _zOrderTimer.Tick += (_, _) => KeepAtBottom();
 
@@ -207,6 +226,7 @@ public partial class MainWindow : Window
 
         _hwndSource = HwndSource.FromHwnd(_hwnd);
         _hwndSource?.AddHook(WndProc);
+        LogService.Info("开始桌面挂载");
         AttachToDesktop();
         KeepAtBottom();
         LogService.Info("进程提权状态: " + (DesktopService.IsProcessElevated() ? "管理员" : "普通用户"));
@@ -260,6 +280,8 @@ public partial class MainWindow : Window
                 }
             };
 
+            _keyboardHook = new KeyboardHook { TryHandle = TryHandleShortcut };
+
             SetupDesktopWatchers();
             _zOrderTimer.Start();
             _initialized = true;
@@ -303,6 +325,7 @@ public partial class MainWindow : Window
 
         foreach (var fence in State.Fences)
         {
+            if (fence.IsHidden) continue;
             LayoutService.ClampFence(fence, WorkAreaRect);
             if (fence.IsPortal)
             {
@@ -835,6 +858,7 @@ public partial class MainWindow : Window
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var fence in State.Fences)
         {
+            if (fence.IsHidden) continue;
             foreach (var item in fence.Items)
             {
                 if (!seen.Add(item.Path)) continue;
@@ -914,9 +938,15 @@ public partial class MainWindow : Window
 
         var ignored = new HashSet<string>(State.IgnoredPaths, StringComparer.OrdinalIgnoreCase);
         var added = 0;
+        var enumerated = 0;
 
         foreach (var desktopItem in DesktopService.EnumerateDesktopItems(State.Settings.IncludeHiddenDesktopItems))
         {
+            enumerated++;
+            if (desktopItem.Path.Contains("最新游戏下载", StringComparison.OrdinalIgnoreCase))
+            {
+                LogService.Info($"导入候选: {desktopItem.Path} ignored={ignored.Contains(desktopItem.Path)} known={known.Contains(desktopItem.Path)}");
+            }
             if (ignored.Contains(desktopItem.Path) || known.Contains(desktopItem.Path)) continue;
             var targetPath = desktopItem.IsDirectory
                 ? null
@@ -940,6 +970,7 @@ public partial class MainWindow : Window
             if (!silent) ShowToast($"已收纳 {added} 个新图标");
         }
 
+        LogService.Info($"桌面导入: 枚举 {enumerated}，新增 {added}");
         return added;
     }
 
@@ -1220,11 +1251,191 @@ public partial class MainWindow : Window
         ShowToast("已重命名为「" + Path.GetFileName(newPath) + "」");
     }
 
+    public void SetSelectedItem(FenceControl fence, FenceItemModel item)
+    {
+        _selectedFence = fence;
+        _selectedItem = item;
+    }
+
+    private bool TryHandleShortcut(FenceShortcut shortcut)
+    {
+        if (_isClosing || _fencesHidden || _originalDesktopMode) return false;
+        var item = _selectedItem;
+        var fence = _selectedFence;
+        if (item is null || fence is null) return false;
+        if (!fence.Model.Items.Contains(item)) return false;
+        if (!IsDesktopOrSelfForeground()) return false;
+
+        switch (shortcut)
+        {
+            case FenceShortcut.Delete:
+                Dispatcher.BeginInvoke(new Action(() => DeleteItem(item)), DispatcherPriority.Input);
+                return true;
+            case FenceShortcut.Copy:
+                Dispatcher.BeginInvoke(new Action(() => CopySelectedItem(item)), DispatcherPriority.Input);
+                return true;
+            case FenceShortcut.Paste:
+                Dispatcher.BeginInvoke(new Action(async () => await PasteIntoSelectedFenceAsync(fence)),
+                    DispatcherPriority.Input);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void CopySelectedItem(FenceItemModel item)
+    {
+        try
+        {
+            if (!DesktopService.PathExists(item.Path))
+            {
+                ShowToast("文件已不存在");
+                return;
+            }
+
+            var files = new StringCollection { item.Path };
+            Clipboard.SetFileDropList(files);
+            ShowToast("已复制「" + item.DisplayName + "」");
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("复制文件失败", ex);
+            ShowToast("复制失败：" + ex.Message);
+        }
+    }
+
+    private async Task PasteIntoSelectedFenceAsync(FenceControl fence)
+    {
+        try
+        {
+            if (!Clipboard.ContainsFileDropList())
+            {
+                ShowToast("剪贴板里没有可粘贴的文件");
+                return;
+            }
+
+            var sources = Clipboard.GetFileDropList()
+                .Cast<string>()
+                .Where(DesktopService.PathExists)
+                .ToList();
+            if (sources.Count == 0)
+            {
+                ShowToast("剪贴板里没有可粘贴的文件");
+                return;
+            }
+
+            var destination = fence.Model.IsPortal && !string.IsNullOrWhiteSpace(fence.Model.FolderPath) &&
+                              Directory.Exists(fence.Model.FolderPath)
+                ? fence.Model.FolderPath
+                : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+
+            var copied = await Task.Run(() =>
+            {
+                var results = new List<string>();
+                foreach (var source in sources)
+                {
+                    try
+                    {
+                        results.Add(CopyIntoFolder(source, destination));
+                    }
+                    catch (Exception ex)
+                    {
+                        LogService.Error("粘贴失败: " + source, ex);
+                    }
+                }
+                return results;
+            });
+
+            if (copied.Count == 0)
+            {
+                ShowToast("粘贴失败，没有文件被复制");
+                return;
+            }
+
+            if (fence.Model.IsPortal)
+            {
+                LoadPortalItems(fence.Model, notify: false);
+                fence.RefreshVisualState();
+            }
+            else
+            {
+                foreach (var path in copied)
+                {
+                    if (!fence.Model.Items.Any(i => string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        fence.Model.Items.Add(new FenceItemModel(path));
+                    }
+                }
+                RefreshAllFenceIcons();
+            }
+
+            SaveSoon();
+            ShowToast($"已粘贴 {copied.Count} 个项目");
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("粘贴到围栏失败", ex);
+            ShowToast("粘贴失败：" + ex.Message);
+        }
+    }
+
+    private static string CopyIntoFolder(string source, string destinationFolder)
+    {
+        Directory.CreateDirectory(destinationFolder);
+        var isDirectory = Directory.Exists(source);
+        var name = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrWhiteSpace(name)) name = "未命名";
+        var target = UniqueCopyPath(Path.Combine(destinationFolder, name), isDirectory);
+
+        if (isDirectory)
+        {
+            CopyDirectoryRecursive(source, target);
+        }
+        else
+        {
+            File.Copy(source, target, overwrite: false);
+        }
+
+        return target;
+    }
+
+    private static string UniqueCopyPath(string target, bool isDirectory)
+    {
+        if (!File.Exists(target) && !Directory.Exists(target)) return target;
+        var folder = Path.GetDirectoryName(target) ?? string.Empty;
+        var name = Path.GetFileNameWithoutExtension(target);
+        var extension = isDirectory ? string.Empty : Path.GetExtension(target);
+        for (var i = 2; i < 10000; i++)
+        {
+            var candidate = Path.Combine(folder, $"{name} ({i}){extension}");
+            if (!File.Exists(candidate) && !Directory.Exists(candidate)) return candidate;
+        }
+        return Path.Combine(folder, name + " (" + Guid.NewGuid().ToString("N") + ")" + extension);
+    }
+
+    private static void CopyDirectoryRecursive(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source))
+        {
+            CopyDirectoryRecursive(directory, Path.Combine(destination, Path.GetFileName(directory)));
+        }
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: false);
+        }
+    }
+
     public void DeleteItem(FenceItemModel item)
     {
         if (string.IsNullOrWhiteSpace(item.Path) || !DesktopService.PathExists(item.Path))
         {
             RemovePathFromAllFences(item.Path);
+            if (ReferenceEquals(_selectedItem, item))
+            {
+                _selectedItem = null;
+                _selectedFence = null;
+            }
             ShowToast("文件已不存在，已从围栏移除");
             SaveSoon();
             return;
@@ -1236,6 +1447,10 @@ public partial class MainWindow : Window
         if (!result) return;
 
         var oldPath = item.Path;
+        var affectedFences = State.Fences
+            .Where(f => !f.IsHidden && !f.IsPortal && f.Items.Contains(item))
+            .ToList();
+
         if (!DesktopService.DeleteToRecycleBin(oldPath, out var error))
         {
             ShowToast("删除失败：" + error);
@@ -1244,6 +1459,18 @@ public partial class MainWindow : Window
         }
 
         RemovePathFromAllFences(oldPath);
+        if (ReferenceEquals(_selectedItem, item))
+        {
+            _selectedItem = null;
+            _selectedFence = null;
+        }
+
+        var removedEmptyFences = 0;
+        foreach (var fence in affectedFences.Where(f => f.Items.Count == 0).ToList())
+        {
+            RemoveFence(fence);
+            removedEmptyFences++;
+        }
 
         if (!State.IgnoredPaths.Any(p => string.Equals(p, oldPath, StringComparison.OrdinalIgnoreCase)))
         {
@@ -1253,7 +1480,7 @@ public partial class MainWindow : Window
         RefreshAllFenceIcons();
         RefreshPortalViews();
         SaveSoon();
-        ShowToast("已移到回收站");
+        ShowToast(removedEmptyFences > 0 ? "已移到回收站，空围栏已自动移除" : "已移到回收站");
     }
 
     private void RemovePathFromAllFences(string path)
@@ -1270,6 +1497,103 @@ public partial class MainWindow : Window
             }
         }
         IconService.Invalidate(path);
+    }
+
+    public FenceModel EnsureHiddenFence()
+    {
+        var fence = State.Fences.FirstOrDefault(f => f.IsHidden);
+        if (fence is not null) return fence;
+
+        fence = new FenceModel
+        {
+            Title = "隐藏围栏",
+            Accent = "violet",
+            IsHidden = true,
+            Width = 420,
+            Height = 420,
+        };
+        State.Fences.Add(fence);
+        SaveNow();
+        return fence;
+    }
+
+    public FenceModel? HiddenFence => State.Fences.FirstOrDefault(f => f.IsHidden);
+
+    private void ProcessHiddenRequests()
+    {
+        if (_isClosing) return;
+        foreach (var path in HiddenVaultService.TakeRequests())
+        {
+            AddToHiddenFence(path);
+        }
+    }
+
+    public bool AddToHiddenFence(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !DesktopService.PathExists(path))
+        {
+            ShowToast("文件或文件夹不存在");
+            return false;
+        }
+
+        var fullPath = Path.GetFullPath(path);
+        var fence = EnsureHiddenFence();
+        if (fence.Items.Any(i => string.Equals(i.Path, fullPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            ShowToast("已经在隐藏围栏中");
+            return true;
+        }
+
+        if (!HiddenVaultService.TrySetHiddenAttribute(fullPath, true, out var wasHidden, out var error))
+        {
+            ShowToast("无法设置隐藏属性：" + error);
+            return false;
+        }
+
+        RemovePathFromAllFences(fullPath);
+        fence.Items.Add(new FenceItemModel(fullPath) { WasHidden = wasHidden });
+        SaveNow();
+        // 不要在右键菜单点击栈里同步重建所有围栏控件，否则 WPF 可能在
+        // 菜单关闭前失去鼠标捕获，表现为界面卡住直到切换应用。
+        Dispatcher.BeginInvoke(new Action(RenderFences), DispatcherPriority.Background);
+        ShowToast("已加入隐藏围栏");
+        return true;
+    }
+
+    public void AddToHiddenFence(FenceItemModel item) => AddToHiddenFence(item.Path);
+
+    public void RestoreHiddenItem(FenceItemModel item)
+    {
+        var fence = HiddenFence;
+        if (fence is null) return;
+
+        if (DesktopService.PathExists(item.Path))
+        {
+            HiddenVaultService.TrySetHiddenAttribute(item.Path, false, out _, out _);
+        }
+
+        fence.Items.Remove(item);
+        SaveNow();
+        Dispatcher.BeginInvoke(new Action(RenderFences), DispatcherPriority.Background);
+        ShowToast("已取消隐藏，文件回到桌面可见状态");
+    }
+
+    public void OpenHiddenVault()
+    {
+        try
+        {
+            var fence = EnsureHiddenFence();
+            var window = new HiddenVaultWindow(this, fence)
+            {
+                Owner = this,
+            };
+            window.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("打开隐藏围栏失败", ex);
+            ShowToast("打开隐藏围栏失败：" + ex.Message);
+        }
     }
 
     public async void CompressItem(FenceItemModel item)
@@ -1445,12 +1769,19 @@ public partial class MainWindow : Window
         EnsureInteractiveState();
         if (!result) return;
 
-        StopPortal(fence.Id);
-        _fences.Remove(fence.Id);
-        FenceCanvas.Children.Remove(control);
-        State.Fences.Remove(fence);
+        RemoveFence(fence);
         SaveNow();
         ShowToast("围栏已删除");
+    }
+
+    private void RemoveFence(FenceModel fence)
+    {
+        StopPortal(fence.Id);
+        if (_fences.Remove(fence.Id, out var control))
+        {
+            FenceCanvas.Children.Remove(control);
+        }
+        State.Fences.Remove(fence);
     }
 
     public void ChoosePortalFolder(FenceControl control)
@@ -1753,14 +2084,15 @@ public partial class MainWindow : Window
         _lastGuardTick = now;
 
         var foreground = NativeMethods.GetForegroundWindow();
-        var foregroundChanged = foreground != _lastForegroundWindow;
+        var previousForeground = _lastForegroundWindow;
         _lastForegroundWindow = foreground;
 
+        var wasDesktop = previousForeground == _hwnd || NativeMethods.IsDesktopWindow(previousForeground);
         var desktopVisible = foreground == _hwnd || NativeMethods.IsDesktopWindow(foreground);
+        var enteredDesktop = desktopVisible && !wasDesktop;
         var uiWasStalled = gap > TimeSpan.FromSeconds(2);
-        if (!desktopVisible) return;
-        if (!foregroundChanged && !uiWasStalled) return;
-        if (now - _lastDesktopRefreshUtc < TimeSpan.FromSeconds(2)) return;
+        if (!enteredDesktop && !(desktopVisible && uiWasStalled)) return;
+        if (now - _lastDesktopRefreshUtc < TimeSpan.FromSeconds(10)) return;
 
         _lastDesktopRefreshUtc = now;
         LogService.Info(uiWasStalled
@@ -2224,7 +2556,9 @@ public partial class MainWindow : Window
 
         var fresh = LayoutService.CreateInitialState(WorkAreaRect,
             DesktopService.EnumerateDesktopItems(State.Settings.IncludeHiddenDesktopItems));
+        var hiddenFences = State.Fences.Where(f => f.IsHidden).ToList();
         State.Fences = fresh.Fences;
+        State.Fences.AddRange(hiddenFences);
         State.IgnoredPaths.Clear();
         State.Settings.HasInitialized = true;
         RenderFences();
@@ -2248,6 +2582,8 @@ public partial class MainWindow : Window
     private void DockSearch_Click(object sender, RoutedEventArgs e) => OpenSearch();
 
     private void DockSettings_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    private void DockHiddenVault_Click(object sender, RoutedEventArgs e) => OpenHiddenVault();
 
     private void DockHide_Click(object sender, RoutedEventArgs e)
     {
@@ -2434,6 +2770,8 @@ public partial class MainWindow : Window
 
         _mouseHook?.Dispose();
         _mouseHook = null;
+        _keyboardHook?.Dispose();
+        _keyboardHook = null;
         _tray?.Dispose();
         _tray = null;
     }

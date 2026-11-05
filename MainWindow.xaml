@@ -61,6 +61,10 @@
                     <TextBlock x:Name="DockOriginalDesktopGlyph" Style="{StaticResource GlyphText}"
                                Text="&#xE7F4;" FontSize="14" />
                 </Button>
+                <Button x:Name="DockHiddenVault" Style="{StaticResource DockButton}" Click="DockHiddenVault_Click"
+                        ToolTip="隐藏围栏">
+                    <TextBlock Style="{StaticResource GlyphText}" Text="&#xE72E;" FontSize="14" />
+                </Button>
                 <Button x:Name="DockHide" Style="{StaticResource DockButton}" Click="DockHide_Click"
                         ToolTip="隐藏围栏  Ctrl+Alt+D">
                     <TextBlock Style="{StaticResource GlyphText}" Text="&#xE7B3;" FontSize="15" />
