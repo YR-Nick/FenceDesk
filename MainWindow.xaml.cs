@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private TrayService? _tray;
     private MouseHook? _mouseHook;
     private KeyboardHook? _keyboardHook;
+    private MusicIslandControl? _musicIsland;
     private FenceControl? _selectedFence;
     private FenceItemModel? _selectedItem;
     private SearchWindow? _search;
@@ -63,6 +64,7 @@ public partial class MainWindow : Window
     private DateTime _showDesktopGuardUntil;
     private bool _allowActivation;
     private bool _desktopAttached;
+    private bool _desktopLayerMode;
     private IntPtr _desktopHost;
     private IntPtr _lastForegroundWindow;
     private DateTime _lastGuardTick;
@@ -281,6 +283,7 @@ public partial class MainWindow : Window
             };
 
             _keyboardHook = new KeyboardHook { TryHandle = TryHandleShortcut };
+            UpdateMusicIsland();
 
             SetupDesktopWatchers();
             _zOrderTimer.Start();
@@ -302,6 +305,11 @@ public partial class MainWindow : Window
             }
 
             _ = InitializeDesktopIconsAsync();
+            // 桌面层模式下 Show() 会把窗口抬到最前，显示完成后立刻压回桌面窗口之上。
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_desktopLayerMode) PlaceAboveDesktopHost();
+            }), DispatcherPriority.ApplicationIdle);
             _ = Dispatcher.BeginInvoke(new Action(async () =>
             {
                 await Task.Delay(1600);
@@ -334,6 +342,12 @@ public partial class MainWindow : Window
 
             AddFenceControl(fence, animate: false);
             if (fence.IsPortal) EnsurePortalWatcher(fence);
+        }
+
+        if (_musicIsland is not null)
+        {
+            FenceCanvas.Children.Add(_musicIsland);
+            Panel.SetZIndex(_musicIsland, 1_000_000);
         }
     }
 
@@ -1251,6 +1265,38 @@ public partial class MainWindow : Window
         ShowToast("已重命名为「" + Path.GetFileName(newPath) + "」");
     }
 
+    public void SetMusicIslandEnabled(bool enabled)
+    {
+        State.Settings.ShowMusicIsland = enabled;
+        UpdateMusicIsland();
+        SaveSoon();
+    }
+
+    private void UpdateMusicIsland()
+    {
+        if (State.Settings.ShowMusicIsland)
+        {
+            if (_musicIsland is not null) return;
+
+            _musicIsland = new MusicIslandControl();
+            FenceCanvas.Children.Add(_musicIsland);
+            Panel.SetZIndex(_musicIsland, 1_000_000);
+            var width = FenceCanvas.ActualWidth > 0
+                ? FenceCanvas.ActualWidth
+                : SystemParameters.WorkArea.Width;
+            Canvas.SetLeft(_musicIsland, Math.Max(0, (width - _musicIsland.Width) / 2));
+            Canvas.SetTop(_musicIsland, Math.Max(0,
+                SystemParameters.WorkArea.Bottom - _musicIsland.Height - 16));
+        }
+        else
+        {
+            if (_musicIsland is null) return;
+            FenceCanvas.Children.Remove(_musicIsland);
+            _musicIsland.Dispose();
+            _musicIsland = null;
+        }
+    }
+
     public void SetSelectedItem(FenceControl fence, FenceItemModel item)
     {
         _selectedFence = fence;
@@ -2043,14 +2089,20 @@ public partial class MainWindow : Window
     {
         if (_hwnd == IntPtr.Zero || _isClosing) return;
 
-        if (_desktopAttached)
-        {
-            EnsureDesktopHost();
-        }
-
         if (!NativeMethods.IsWindowVisible(_hwnd))
         {
             NativeMethods.ShowWindow(_hwnd, 5);
+        }
+
+        if (_desktopLayerMode)
+        {
+            PlaceAboveDesktopHost();
+            return;
+        }
+
+        if (_desktopAttached)
+        {
+            EnsureDesktopHost();
         }
 
         NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOP, 0, 0, 0, 0,
@@ -2061,7 +2113,7 @@ public partial class MainWindow : Window
 
     private void EnsureDesktopHost()
     {
-        if (_hwnd == IntPtr.Zero || _isClosing) return;
+        if (_hwnd == IntPtr.Zero || _isClosing || _desktopLayerMode) return;
 
         var defView = NativeMethods.GetDesktopListView();
         if (defView == IntPtr.Zero) return;
@@ -2199,6 +2251,13 @@ public partial class MainWindow : Window
             if (rect.Contains(point)) return true;
         }
 
+        if (_musicIsland is not null && _musicIsland.Visibility == Visibility.Visible)
+        {
+            var topLeft = _musicIsland.TranslatePoint(new Point(0, 0), this);
+            if (new Rect(topLeft.X, topLeft.Y, _musicIsland.ActualWidth, _musicIsland.ActualHeight)
+                .Contains(point)) return true;
+        }
+
         if (Dock.Visibility == Visibility.Visible)
         {
             var topLeft = Dock.TranslatePoint(new Point(0, 0), this);
@@ -2260,12 +2319,21 @@ public partial class MainWindow : Window
         try
         {
             var defView = NativeMethods.GetDesktopListView();
-            _desktopHost = defView != IntPtr.Zero
+            var host = defView != IntPtr.Zero
                 ? NativeMethods.GetParent(defView)
                 : NativeMethods.FindWindow("Progman", null);
-            if (_desktopHost == IntPtr.Zero)
+            if (host == IntPtr.Zero)
             {
                 LogService.Info("桌面挂载跳过：未找到 Progman/WorkerW");
+                return;
+            }
+
+            // Windows 11 的 Progman 带 WS_EX_NOREDIRECTIONBITMAP，没有 DWM 重定向表面，
+            // SetParent 进去的子窗口永远不会被合成（Win32 里“可见”，屏幕上是空白）。
+            // 这种情况下改用桌面层模式：窗口保持顶层，靠 z 序停在桌面之上、应用窗口之下。
+            if (!NativeMethods.HasRedirectionSurface(host))
+            {
+                AttachAsDesktopLayer(host);
                 return;
             }
 
@@ -2274,19 +2342,21 @@ public partial class MainWindow : Window
             style &= ~NativeMethods.WS_POPUP;
             NativeMethods.SetWindowLongPtr(_hwnd, NativeMethods.GWL_STYLE, new IntPtr(style));
 
-            var previous = NativeMethods.SetParent(_hwnd, _desktopHost);
+            var previous = NativeMethods.SetParent(_hwnd, host);
             if (previous == IntPtr.Zero && Marshal.GetLastWin32Error() != 0)
             {
                 LogService.Error("桌面挂载失败: Win32=" + Marshal.GetLastWin32Error());
                 return;
             }
 
+            _desktopLayerMode = false;
+            _desktopHost = host;
             NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOP, 0, 0,
                 (int)Width, (int)Height,
                 NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW |
                 NativeMethods.SWP_FRAMECHANGED);
             _desktopAttached = true;
-            LogService.Info("已挂载到桌面窗口: " + _desktopHost);
+            LogService.Info("已挂载到桌面窗口: " + host);
         }
         catch (Exception ex)
         {
@@ -2294,9 +2364,68 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 桌面层模式：窗口仍是普通顶层窗口，只把自己插到桌面窗口（Progman）正上方。
+    /// 这样围栏盖住壁纸、又被所有应用窗口盖住；不能再用 SetParent，
+    /// 因为 Win11 的 Progman 没有重定向表面，子窗口不会被绘制。
+    /// </summary>
+    private void AttachAsDesktopLayer(IntPtr host)
+    {
+        var style = NativeMethods.GetWindowLongPtr(_hwnd, NativeMethods.GWL_STYLE).ToInt64();
+        if ((style & NativeMethods.WS_CHILD) != 0)
+        {
+            style &= ~NativeMethods.WS_CHILD;
+            NativeMethods.SetWindowLongPtr(_hwnd, NativeMethods.GWL_STYLE, new IntPtr(style));
+        }
+
+        _desktopLayerMode = true;
+        _desktopHost = host;
+        _desktopAttached = true;
+
+        NativeMethods.ShowWindow(_hwnd, 5);
+        NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero,
+            (int)WorkAreaRect.Left, (int)WorkAreaRect.Top,
+            (int)WorkAreaRect.Width, (int)WorkAreaRect.Height,
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOZORDER |
+            NativeMethods.SWP_FRAMECHANGED | NativeMethods.SWP_SHOWWINDOW);
+        PlaceAboveDesktopHost();
+        LogService.Info("桌面层模式（Progman 无重定向表面）：窗口置于桌面窗口上方 " + host);
+    }
+
+    /// <summary>
+    /// 桌面层模式下维护 z 序：把自己插到“桌面窗口正上方那个窗口”的下面，
+    /// 也就是紧贴桌面窗口之上、所有应用窗口之下。
+    /// </summary>
+    private void PlaceAboveDesktopHost()
+    {
+        if (_hwnd == IntPtr.Zero || _isClosing || !_desktopLayerMode) return;
+
+        var host = NativeMethods.FindWindow("Progman", null);
+        if (host == IntPtr.Zero) host = _desktopHost;
+        if (host == IntPtr.Zero) return;
+        _desktopHost = host;
+
+        var above = NativeMethods.GetWindow(host, NativeMethods.GW_HWNDPREV);
+        // above 为空说明桌面窗口已经在 z 序最底部，没有可以插队的目标；
+        // above 就是自己说明已经停在对的位置，无需重复设置。
+        if (above == IntPtr.Zero || above == _hwnd) return;
+
+        NativeMethods.SetWindowPos(_hwnd, above, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE |
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
+    }
+
     private void KeepAtBottom()
     {
         if (_hwnd == IntPtr.Zero || _isClosing) return;
+
+        if (_desktopLayerMode)
+        {
+            // 桌面层模式：不沉底（沉底会跑到 Progman 后面看不见），
+            // 只把自己压回桌面窗口正上方。
+            PlaceAboveDesktopHost();
+            return;
+        }
 
         if (_desktopAttached)
         {
@@ -2320,7 +2449,9 @@ public partial class MainWindow : Window
         switch (msg)
         {
             case NativeMethods.WM_MOUSEACTIVATE:
-                if (!_desktopAttached && !_allowActivation)
+                // 桌面层模式下窗口是顶层窗口，一旦被激活就会跳到应用窗口上面，
+                // 所以点击围栏同样不激活，保持“不抢前台、不闪烁”。
+                if ((_desktopLayerMode || !_desktopAttached) && !_allowActivation)
                 {
                     handled = true;
                     return new IntPtr(NativeMethods.MA_NOACTIVATE);
@@ -2772,6 +2903,8 @@ public partial class MainWindow : Window
         _mouseHook = null;
         _keyboardHook?.Dispose();
         _keyboardHook = null;
+        _musicIsland?.Dispose();
+        _musicIsland = null;
         _tray?.Dispose();
         _tray = null;
     }

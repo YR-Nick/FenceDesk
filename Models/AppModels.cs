@@ -39,6 +39,7 @@ public sealed class AppSettings
     public bool DoubleClickHide { get; set; } = true;
     public bool AutoImportNew { get; set; } = true;
     public bool IncludeHiddenDesktopItems { get; set; }
+    public bool ShowMusicIsland { get; set; } = true;
     public bool LaunchAtLogin { get; set; }
     public bool ShowDock { get; set; } = true;
     public int IconSize { get; set; } = 42;

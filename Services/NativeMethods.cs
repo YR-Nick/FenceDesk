@@ -21,11 +21,16 @@ internal static class NativeMethods
     public const int WS_POPUP = unchecked((int)0x80000000);
     public const int WS_EX_TOOLWINDOW = 0x00000080;
     public const int WS_EX_APPWINDOW = 0x00040000;
+    // 没有重定向表面的窗口（Win11 的 Progman）不会被 DWM 合成，挂进去的子窗口永远不显示。
+    public const int WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
+
+    public const int GW_HWNDPREV = 3;
 
     public static readonly IntPtr HWND_BOTTOM = new(1);
     public static readonly IntPtr HWND_TOP = IntPtr.Zero;
     public const uint SWP_NOSIZE = 0x0001;
     public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOZORDER = 0x0004;
     public const uint SWP_NOACTIVATE = 0x0010;
     public const uint SWP_NOOWNERZORDER = 0x0200;
     public const uint SWP_FRAMECHANGED = 0x0020;
@@ -219,6 +224,9 @@ internal static class NativeMethods
     public static extern IntPtr GetParent(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
 
     [DllImport("user32.dll")]
@@ -355,6 +363,18 @@ internal static class NativeMethods
         }
 
         return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// 窗口是否由 DWM 正常合成（拥有重定向表面）。
+    /// Windows 11 的 Progman 带 WS_EX_NOREDIRECTIONBITMAP，DWM 不会绘制它的子窗口，
+    /// 把围栏 SetParent 进去会出现“窗口可见但屏幕上一片空白”的现象。
+    /// </summary>
+    public static bool HasRedirectionSurface(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        var exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+        return (exStyle & WS_EX_NOREDIRECTIONBITMAP) == 0;
     }
 
     public static bool IsDesktopWindow(IntPtr hwnd)

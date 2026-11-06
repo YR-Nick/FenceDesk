@@ -33,6 +33,7 @@ public partial class SettingsWindow : Window
         DoubleClickCheck.IsChecked = settings.DoubleClickHide;
         AutoImportCheck.IsChecked = settings.AutoImportNew;
         IncludeHiddenCheck.IsChecked = settings.IncludeHiddenDesktopItems;
+        MusicIslandCheck.IsChecked = settings.ShowMusicIsland;
         ShowDockCheck.IsChecked = settings.ShowDock;
         AutoStartCheck.IsChecked = DesktopService.IsAutoStartEnabled();
         if (AutoStartCheck.IsChecked == true)
@@ -95,6 +96,7 @@ public partial class SettingsWindow : Window
         _host.State.Settings.DoubleClickHide = DoubleClickCheck.IsChecked == true;
         _host.State.Settings.AutoImportNew = AutoImportCheck.IsChecked == true;
         _host.State.Settings.IncludeHiddenDesktopItems = IncludeHiddenCheck.IsChecked == true;
+        _host.SetMusicIslandEnabled(MusicIslandCheck.IsChecked == true);
         _host.SaveSettings();
     }
 
