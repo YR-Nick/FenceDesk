@@ -1676,6 +1676,16 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             CloseProgressWindow(window);
+            // 取消时磁盘上会留下写了一半的压缩包，直接删掉，避免用户拿到坏包。
+            try
+            {
+                if (File.Exists(dialog.FileName)) File.Delete(dialog.FileName);
+            }
+            catch
+            {
+                // 文件被占用时留给用户手动删除
+            }
+
             ShowToast("已取消压缩，未完成的压缩包已丢弃");
         }
         catch (Exception ex)
