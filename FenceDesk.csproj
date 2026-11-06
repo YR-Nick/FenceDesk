@@ -13,8 +13,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>FenceDesk</AssemblyName>
     <RootNamespace>FenceDesk</RootNamespace>
-    <Version>1.3.41</Version>
-    <FileVersion>1.3.41.0</FileVersion>
+    <Version>1.3.42</Version>
+    <FileVersion>1.3.42.0</FileVersion>
     <Company>FenceDesk</Company>
     <Product>FenceDesk 桌面围栏</Product>
     <Description>Fences 风格的 Windows 桌面整理工具</Description>
@@ -38,6 +38,10 @@
     <EmbeddedResource Remove="installer\**" />
     <None Remove="installer\**" />
     <Page Remove="installer\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpCompress" Version="0.50.8" />
   </ItemGroup>
 
 </Project>

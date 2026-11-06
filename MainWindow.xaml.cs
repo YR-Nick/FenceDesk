@@ -1662,14 +1662,25 @@ public partial class MainWindow : Window
         };
         if (dialog.ShowDialog(this) != true) return;
 
+        using var cancellation = new CancellationTokenSource();
+        var window = new ArchiveProgressWindow("正在压缩", Path.GetFileName(dialog.FileName));
+        window.CancelRequested += (_, _) => cancellation.Cancel();
+        window.Show();
+
         try
         {
-            ShowToast("正在压缩…");
-            await ArchiveService.CompressAsync(item.Path, dialog.FileName);
+            await ArchiveService.CompressAsync(item.Path, dialog.FileName, window.Progress, cancellation.Token);
+            CloseProgressWindow(window);
             ShowToast("已压缩为 " + Path.GetFileName(dialog.FileName));
+        }
+        catch (OperationCanceledException)
+        {
+            CloseProgressWindow(window);
+            ShowToast("已取消压缩，未完成的压缩包已丢弃");
         }
         catch (Exception ex)
         {
+            CloseProgressWindow(window);
             ShowToast("压缩失败：" + ex.Message);
             DesktopService.PlayErrorSound();
         }
@@ -1699,20 +1710,51 @@ public partial class MainWindow : Window
         }
 
         Directory.CreateDirectory(destinationParent);
-        var destination = UniqueDirectory(destinationParent, stem);
+        var destination = Path.Combine(destinationParent, SafeFolderName(stem));
+
+        using var cancellation = new CancellationTokenSource();
+        var window = new ArchiveProgressWindow("正在解压", Path.GetFileName(item.Path));
+        window.CancelRequested += (_, _) => cancellation.Cancel();
+        window.Show();
+
+        var options = new ArchiveExtractOptions
+        {
+            Progress = window.Progress,
+            Cancellation = cancellation.Token,
+            ResolveConflict = conflict => AskArchiveConflict(conflict),
+        };
 
         try
         {
-            ShowToast("正在解压…");
-            await ArchiveService.ExtractAsync(item.Path, destination);
+            await ArchiveService.ExtractAsync(item.Path, destination, options);
+            CloseProgressWindow(window);
             ShowToast("已解压到 " + Path.GetFileName(destination));
             DesktopService.OpenDirectory(destination);
         }
+        catch (OperationCanceledException)
+        {
+            CloseProgressWindow(window);
+            ShowToast("已取消解压，已经解出的文件会保留");
+        }
         catch (Exception ex)
         {
+            CloseProgressWindow(window);
             ShowToast("解压失败：" + ex.Message);
             DesktopService.PlayErrorSound();
         }
+    }
+
+    private static void CloseProgressWindow(ArchiveProgressWindow window)
+    {
+        window.Finish();
+        window.Close();
+    }
+
+    /// <summary>解压线程遇到同名文件时切回 UI 线程询问用户。</summary>
+    private ArchiveConflictAnswer AskArchiveConflict(ArchiveConflict conflict)
+    {
+        if (!Dispatcher.CheckAccess()) return Dispatcher.Invoke(() => AskArchiveConflict(conflict));
+        return ArchiveConflictWindow.Ask(conflict);
     }
 
     public void OpenWithItem(FenceItemModel item)
@@ -1726,24 +1768,23 @@ public partial class MainWindow : Window
     private static string ArchiveStem(string path)
     {
         var name = Path.GetFileName(path);
-        if (name.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
+        foreach (var suffix in new[] { ".tar.gz", ".tar.bz2", ".tar.xz" })
         {
-            return name[..^7];
+            if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return name[..^suffix.Length];
+            }
         }
         return Path.GetFileNameWithoutExtension(name);
     }
 
-    private static string UniqueDirectory(string parent, string stem)
+    private static string SafeFolderName(string stem)
     {
-        if (string.IsNullOrWhiteSpace(stem)) stem = "解压文件";
-        var candidate = Path.Combine(parent, stem);
-        var index = 2;
-        while (Directory.Exists(candidate))
-        {
-            candidate = Path.Combine(parent, stem + " (" + index + ")");
-            index++;
-        }
-        return candidate;
+        if (string.IsNullOrWhiteSpace(stem)) return "解压文件";
+        var invalid = Path.GetInvalidFileNameChars();
+        var chars = stem.Select(c => invalid.Contains(c) ? '_' : c).ToArray();
+        var name = new string(chars).Trim().TrimEnd('.');
+        return string.IsNullOrWhiteSpace(name) ? "解压文件" : name;
     }
 
     public void ShowItemProperties(FenceItemModel item)
