@@ -4,7 +4,7 @@
 
 > 普通整理只保存「引用」，不会自动移动、重命名或删除你的文件。隐藏围栏会设置 Windows 的 Hidden 属性，不移动、不删除文件；取消隐藏时恢复可见。
 
-当前版本 **1.3.42**：内置 ZIP / 7z / RAR / TAR / GZ / BZ2 / XZ 解压（不再依赖 7-Zip、WinRAR），解压与压缩带进度窗口、可取消，同名文件可逐项选择覆盖 / 跳过 / 两者都保留。
+当前版本 **1.3.43**：内置 ZIP / 7z / RAR / TAR / GZ / BZ2 / XZ 解压（不再依赖 7-Zip、WinRAR），解压与压缩带进度窗口、可取消，同名文件可逐项选择覆盖 / 跳过 / 两者都保留。
 
 ![FenceDesk 主界面](docs/screenshot-main.png)
 
@@ -93,7 +93,7 @@ HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run
 
 安装步骤：
 
-1. **先把整个发布包解压/复制到普通目录**，例如桌面或 `C:\Temp\FenceDesk-1.3.42`。
+1. **先把整个发布包解压/复制到普通目录**，例如桌面或 `C:\Temp\FenceDesk-1.3.43`。
    - 不要直接在 `D:\项目` 里运行安装程序。该工作区目录带有低完整性标签，exe 会以低权限运行，无法写启动项。
 2. 双击 `FenceDeskSetup.exe`。
 3. 如果系统启用 UAC，确认管理员授权；如果 UAC 已关闭，会直接以管理员权限运行。
@@ -164,7 +164,7 @@ dotnet run --project .\FenceDesk.csproj
 .\publish.ps1
 ```
 
-产物位于 `publish\win-x64\FenceDesk.exe`，压缩包位于 `dist\FenceDesk-v1.3.42-win-x64.zip`。发布目录包含 exe 与 5 个 WPF 原生 DLL，请保持它们在同一目录。
+产物位于 `publish\win-x64\FenceDesk.exe`，压缩包位于 `dist\FenceDesk-v1.3.43-win-x64.zip`。发布目录包含 exe 与 5 个 WPF 原生 DLL，请保持它们在同一目录。
 
 也可以手工执行：
 

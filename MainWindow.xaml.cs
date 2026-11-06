@@ -57,6 +57,7 @@ public partial class MainWindow : Window
 
     private bool _initialized;
     private bool _fencesHidden;
+    private DateTime _lastVisibilityChangeUtc = DateTime.MinValue;
     private bool _recycleBinBusy;
     private bool _originalDesktopMode;
     private bool _originalDesktopBusy;
@@ -188,6 +189,7 @@ public partial class MainWindow : Window
         {
             EnsureAboveDesktop();
             CheckDesktopSurfaceRefresh();
+            ReconcileFenceCanvasState();
         };
         _desktopGuardTimer.Start();
         _lastGuardTick = DateTime.UtcNow;
@@ -284,6 +286,12 @@ public partial class MainWindow : Window
 
             _keyboardHook = new KeyboardHook { TryHandle = TryHandleShortcut };
             UpdateMusicIsland();
+
+            if (DiagEnabled)
+            {
+                PreviewMouseWheel += (_, e) =>
+                    DiagMouse($"WPF WHEEL delta={e.Delta} at={e.GetPosition(this)} hit={e.OriginalSource?.GetType().Name} handled={e.Handled}");
+            }
 
             SetupDesktopWatchers();
             _zOrderTimer.Start();
@@ -776,6 +784,7 @@ public partial class MainWindow : Window
         var shouldShow = show ?? _fencesHidden;
         if (shouldShow == !_fencesHidden) return;
         _fencesHidden = !shouldShow;
+        _lastVisibilityChangeUtc = DateTime.UtcNow;
 
         if (shouldShow)
         {
@@ -828,6 +837,7 @@ public partial class MainWindow : Window
 
         UpdateSystemIconsVisibility();
         _tray?.UpdateHidden(_fencesHidden);
+        DiagMouse($"VIS show={shouldShow} canvasVis={FenceCanvas.Visibility} canvasHit={FenceCanvas.IsHitTestVisible} islandL={IslandLeft():0} islandW={(_musicIsland?.Width ?? 0):0}");
     }
 
     private void UpdateDockVisibility()
@@ -1281,12 +1291,14 @@ public partial class MainWindow : Window
             _musicIsland = new MusicIslandControl();
             FenceCanvas.Children.Add(_musicIsland);
             Panel.SetZIndex(_musicIsland, 1_000_000);
-            var width = FenceCanvas.ActualWidth > 0
+            var width = FenceCanvas.ActualWidth > 1
                 ? FenceCanvas.ActualWidth
                 : SystemParameters.WorkArea.Width;
+            var height = FenceCanvas.ActualHeight > 1
+                ? FenceCanvas.ActualHeight
+                : SystemParameters.WorkArea.Height;
             Canvas.SetLeft(_musicIsland, Math.Max(0, (width - _musicIsland.Width) / 2));
-            Canvas.SetTop(_musicIsland, Math.Max(0,
-                SystemParameters.WorkArea.Bottom - _musicIsland.Height - 16));
+            Canvas.SetTop(_musicIsland, Math.Max(0, height - _musicIsland.Height - 16));
         }
         else
         {
@@ -2517,9 +2529,12 @@ public partial class MainWindow : Window
                         var point = PointFromScreen(screenPoint);
                         if (!IsInteractivePoint(point))
                         {
+                            DiagHitTest("transparent", screenPoint, point);
                             handled = true;
                             return new IntPtr(NativeMethods.HTTRANSPARENT);
                         }
+
+                        DiagHitTest("client", screenPoint, point);
                     }
                     catch
                     {
@@ -2528,6 +2543,21 @@ public partial class MainWindow : Window
                 }
                 break;
             }
+            case 0x020A: // WM_MOUSEWHEEL
+                // 桌面层模式下窗口几乎从不被激活，WPF 对非激活窗口的滚轮分发并不可靠：
+                // 消息能到窗口，但 ScrollViewer 经常收不到。这里直接滚动鼠标下的滚动区，
+                // 让围栏在没被激活时也能用滚轮。
+                if (TryScrollUnderCursor(wParam))
+                {
+                    handled = true;
+                }
+                break;
+            case 0x0201: // WM_LBUTTONDOWN
+                DiagMouse($"LBUTTONDOWN client={ClientPoint(lParam)} hidden={_fencesHidden} canvasHit={FenceCanvas.IsHitTestVisible} canvasOpacity={FenceCanvas.Opacity:0.##} canvasVis={FenceCanvas.Visibility}");
+                break;
+            case 0x0204: // WM_RBUTTONDOWN
+                DiagMouse($"RBUTTONDOWN client={ClientPoint(lParam)} hidden={_fencesHidden} canvasHit={FenceCanvas.IsHitTestVisible} canvasOpacity={FenceCanvas.Opacity:0.##} canvasVis={FenceCanvas.Visibility}");
+                break;
             case NativeMethods.WM_HOTKEY:
             {
                 var id = wParam.ToInt32();
@@ -2552,6 +2582,54 @@ public partial class MainWindow : Window
         return IntPtr.Zero;
     }
 
+    private double IslandLeft()
+        => _musicIsland is null ? double.NaN : Canvas.GetLeft(_musicIsland);
+
+    /// <summary>
+    /// 把 WM_MOUSEWHEEL 直接作用到鼠标下方的滚动区域。
+    /// 桌面层模式下窗口不被激活，WPF 的滚轮分发在部分系统上会丢事件，
+    /// 这里不依赖激活状态，自己找鼠标下的 ScrollViewer 滚动。
+    /// </summary>
+    private bool TryScrollUnderCursor(IntPtr wParam)
+    {
+        var delta = unchecked((short)((wParam.ToInt64() >> 16) & 0xFFFF));
+        if (delta == 0) return false;
+        if (!NativeMethods.GetCursorPos(out var cursor)) return false;
+
+        try
+        {
+            var point = PointFromScreen(new Point(cursor.X, cursor.Y));
+            if (!IsInteractivePoint(point)) return false;
+
+            var scroll = FindScrollAncestor(InputHitTest(point) as DependencyObject);
+            if (scroll is null || scroll.ScrollableHeight <= 0) return false;
+
+            var lines = SystemParameters.WheelScrollLines;
+            var step = lines > 0 ? lines * 52.0 : 52.0;
+            var target = scroll.VerticalOffset - Math.Sign(delta) * step;
+            scroll.ScrollToVerticalOffset(Math.Clamp(target, 0, scroll.ScrollableHeight));
+            DiagMouse($"WHEEL scrolled to {scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0} delta={delta}");
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static ScrollViewer? FindScrollAncestor(DependencyObject? node)
+    {
+        while (node is not null)
+        {
+            if (node is ScrollViewer viewer) return viewer;
+            node = node is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(node)
+                : LogicalTreeHelper.GetParent(node);
+        }
+
+        return null;
+    }
+
     private static bool TryGetScreenPoint(IntPtr lParam, out Point point)
     {
         var value = lParam.ToInt64();
@@ -2559,6 +2637,42 @@ public partial class MainWindow : Window
         var y = unchecked((short)((value >> 16) & 0xFFFF));
         point = new Point(x, y);
         return true;
+    }
+
+    private static bool DiagEnabled { get; } =
+        Environment.GetEnvironmentVariable("FENCEDESK_DIAG") == "1";
+
+    private static int _diagLines;
+    private string? _lastHitTestDiag;
+    private DateTime _lastHitTestDiagUtc;
+
+    private void DiagMouse(string message)
+    {
+        if (!DiagEnabled || _diagLines > 600) return;
+        _diagLines++;
+        LogService.Info("[diag] " + message);
+    }
+
+    /// <summary>只在命中结果或状态发生变化时记一行，避免每次鼠标移动都写日志。</summary>
+    private void DiagHitTest(string result, Point screenPoint, Point dipPoint)
+    {
+        if (!DiagEnabled || _diagLines > 600) return;
+        var line = $"{result} screen={screenPoint} dip={dipPoint} hidden={_fencesHidden} init={_initialized} " +
+                   $"canvasVis={FenceCanvas.Visibility} canvasHit={FenceCanvas.IsHitTestVisible} " +
+                   $"canvasOpacity={FenceCanvas.Opacity:0.##} original={_originalDesktopMode} " +
+                   $"islandL={IslandLeft():0} fences={_fences.Count}";
+        if (line == _lastHitTestDiag) return;
+        if ((DateTime.UtcNow - _lastHitTestDiagUtc).TotalMilliseconds < 250) return;
+        _lastHitTestDiag = line;
+        _lastHitTestDiagUtc = DateTime.UtcNow;
+        _diagLines++;
+        LogService.Info("[diag] NCHITTEST " + line);
+    }
+
+    private static Point ClientPoint(IntPtr lParam)
+    {
+        var value = lParam.ToInt64();
+        return new Point(unchecked((short)(value & 0xFFFF)), unchecked((short)((value >> 16) & 0xFFFF)));
     }
 
     private void UpdateWorkArea()
@@ -2804,11 +2918,57 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 兜底修复状态错位："隐藏围栏 / 返回原桌面 / 显示桌面" 都会直接改
+    /// Visibility、IsHitTestVisible、Opacity，一旦某条路径漏改，就会出现
+    /// "围栏看着在、鼠标点不动、滚轮也没反应"。这里每 650ms 对齐一次。
+    /// </summary>
+    private void ReconcileFenceCanvasState()
+    {
+        if (_isClosing || !_initialized) return;
+        if ((DateTime.UtcNow - _lastVisibilityChangeUtc).TotalMilliseconds < 1500) return;
+
+        var shouldShow = !_fencesHidden && !_originalDesktopMode;
+        if (shouldShow)
+        {
+            var repaired = false;
+            if (FenceCanvas.Visibility != Visibility.Visible)
+            {
+                FenceCanvas.Visibility = Visibility.Visible;
+                repaired = true;
+            }
+
+            if (!FenceCanvas.IsHitTestVisible)
+            {
+                FenceCanvas.IsHitTestVisible = true;
+                repaired = true;
+            }
+
+            if (FenceCanvas.Opacity < 0.99)
+            {
+                FenceCanvas.Opacity = 1;
+                repaired = true;
+            }
+
+            if (repaired)
+            {
+                LogService.Info("[state] 自动修复围栏画布：已恢复显示与鼠标命中");
+            }
+        }
+        else if (FenceCanvas.IsHitTestVisible)
+        {
+            FenceCanvas.IsHitTestVisible = false;
+            LogService.Info("[state] 自动修复围栏画布：隐藏状态下关闭鼠标命中");
+        }
+    }
+
     private async Task EnterOriginalDesktopAsync()
     {
         _hideIconsBeforeOriginal = State.Settings.HideDesktopIcons;
         _originalDesktopMode = true;
+        _lastVisibilityChangeUtc = DateTime.UtcNow;
         FenceCanvas.Visibility = Visibility.Collapsed;
+        FenceCanvas.IsHitTestVisible = false;
         SystemIconsPanel.Visibility = Visibility.Collapsed;
         UpdateOriginalDesktopButton();
 
@@ -2818,7 +2978,8 @@ public partial class MainWindow : Window
             if (!ok)
             {
                 _originalDesktopMode = false;
-                FenceCanvas.Visibility = Visibility.Visible;
+                FenceCanvas.Visibility = _fencesHidden ? Visibility.Collapsed : Visibility.Visible;
+                FenceCanvas.IsHitTestVisible = !_fencesHidden;
                 UpdateSystemIconsVisibility();
                 UpdateOriginalDesktopButton();
                 ShowToast("切换原桌面失败，请稍后重试");
@@ -2832,7 +2993,12 @@ public partial class MainWindow : Window
     private async Task ExitOriginalDesktopAsync()
     {
         _originalDesktopMode = false;
-        FenceCanvas.Visibility = Visibility.Visible;
+        _lastVisibilityChangeUtc = DateTime.UtcNow;
+        // 从原桌面返回时，如果围栏之前处于“隐藏”状态，就保持隐藏。
+        // 早先这里无条件显示画布，会造成“围栏看着在、鼠标却点不动”的状态。
+        FenceCanvas.Visibility = _fencesHidden ? Visibility.Collapsed : Visibility.Visible;
+        FenceCanvas.IsHitTestVisible = !_fencesHidden;
+        if (!_fencesHidden) FenceCanvas.Opacity = 1;
         UpdateSystemIconsVisibility();
         UpdateOriginalDesktopButton();
 

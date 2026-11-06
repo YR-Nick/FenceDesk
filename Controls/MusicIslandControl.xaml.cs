@@ -76,10 +76,10 @@ public partial class MusicIslandControl : UserControl, IDisposable
         var newWidth = Width + (targetWidth - Width) * 0.18;
         var newHeight = Height + (targetHeight - Height) * 0.18;
 
-        if (Parent is Canvas canvas)
+        if (Parent is Canvas canvas && canvas.ActualWidth > 1 && canvas.ActualHeight > 1)
         {
             var left = Canvas.GetLeft(this);
-            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(left)) left = Math.Max(0, (canvas.ActualWidth - Width) / 2);
             var maxLeft = Math.Max(0, canvas.ActualWidth - newWidth);
             Canvas.SetLeft(this, Math.Clamp(left - (newWidth - Width) / 2, 0, maxLeft));
         }
