@@ -26,6 +26,43 @@ public partial class App : Application
             return;
         }
 
+        // 应急恢复：桌面图标被隐藏、围栏窗口却起不来时，双击带这个参数的快捷方式即可恢复。
+        if (e.Args.Any(a => a.Equals("--restore-desktop", StringComparison.OrdinalIgnoreCase)))
+        {
+            var restored = DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 2500);
+            LogService.Info("命令行恢复桌面图标：" + (restored ? "成功" : "失败"));
+            Shutdown(restored ? 0 : 1);
+            return;
+        }
+
+        // 看门狗：主进程被任务管理器强杀时，Windows 不会执行任何退出清理，
+        // 桌面图标会一直保持隐藏。这个隐藏进程只做一件事——等主进程结束后
+        // 把图标恢复出来。
+        var watchdogIndex = Array.FindIndex(e.Args,
+            a => a.Equals("--watchdog", StringComparison.OrdinalIgnoreCase));
+        if (watchdogIndex >= 0)
+        {
+            var exitCode = RunIconWatchdog(watchdogIndex + 1 < e.Args.Length ? e.Args[watchdogIndex + 1] : null);
+            Shutdown(exitCode);
+            return;
+        }
+
+        // 启动自检：上次若是被强杀 / 直接重启，桌面图标可能还停在隐藏状态。
+        // 这里先无条件恢复可见，保证任何情况下都先有一个正常桌面；
+        // 之后 MainWindow 会按设置重新隐藏并由围栏接管。
+        try
+        {
+            if (DesktopService.AreDesktopIconsHidden())
+            {
+                LogService.Info("启动自检：桌面图标处于隐藏状态，先恢复可见");
+                DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 2500);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("启动自检恢复桌面图标失败", ex);
+        }
+
         var hiddenIndex = Array.FindIndex(e.Args,
             a => a.Equals("--add-hidden", StringComparison.OrdinalIgnoreCase));
         if (hiddenIndex >= 0 && hiddenIndex + 1 < e.Args.Length)
@@ -109,6 +146,52 @@ public partial class App : Application
             MessageBox.Show("FenceDesk 启动失败：\n" + ex.Message, "FenceDesk", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
         }
+    }
+
+    /// <summary>
+    /// 看门狗：等主进程退出后，如果桌面图标仍然隐藏就恢复。
+    /// 覆盖“任务管理器结束进程 / 崩溃”这类完全不执行退出清理的场景。
+    /// </summary>
+    private static int RunIconWatchdog(string? pidText)
+    {
+        if (!int.TryParse(pidText, out var pid) || pid <= 0) return 1;
+
+        Process? main;
+        try
+        {
+            main = Process.GetProcessById(pid);
+        }
+        catch
+        {
+            return 0; // 主进程已经不在
+        }
+
+        try
+        {
+            main.WaitForExit();
+        }
+        catch
+        {
+            // ignore
+        }
+
+        // 正常退出会自己恢复图标，这里留一点时间给它先做完。
+        Thread.Sleep(1200);
+
+        try
+        {
+            if (DesktopService.AreDesktopIconsHidden())
+            {
+                LogService.Info("看门狗：主进程已退出但桌面图标仍隐藏，恢复可见");
+                DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 2500);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("看门狗恢复桌面图标失败", ex);
+        }
+
+        return 0;
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)

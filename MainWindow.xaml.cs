@@ -57,6 +57,7 @@ public partial class MainWindow : Window
 
     private bool _initialized;
     private bool _fencesHidden;
+    private bool _watchdogStarted;
     private DateTime _lastVisibilityChangeUtc = DateTime.MinValue;
     private bool _recycleBinBusy;
     private bool _originalDesktopMode;
@@ -2756,6 +2757,33 @@ public partial class MainWindow : Window
                 State.Settings.OwnsHiddenIcons = DesktopService.OwnsHiddenIcons;
                 UpdateSystemIconsVisibility();
                 SaveSoon();
+
+                if (hidden)
+                {
+                    // 图标一旦隐藏，就必须保证重启后还有程序把围栏画出来，
+                    // 否则一次强杀或直接重启就会留下一个全空的桌面。
+                    if (!State.Settings.LaunchAtLogin)
+                    {
+                        if (SetAutoStart(true, out var autoStartError))
+                        {
+                            LogService.Info("已自动开启开机启动，保证隐藏图标后重启仍能看到桌面");
+                        }
+                        else
+                        {
+                            LogService.Error("无法开启开机启动，回滚为显示桌面图标：" + autoStartError);
+                            await Task.Run(() => DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 1800));
+                            State.Settings.HideDesktopIcons = false;
+                            State.Settings.OwnsHiddenIcons = false;
+                            SaveSoon();
+                            UpdateSystemIconsVisibility();
+                            ShowToast("无法开启开机启动，已保留系统桌面图标，避免重启后桌面空白");
+                            return false;
+                        }
+                    }
+
+                    StartIconWatchdog();
+                }
+
                 if (notify)
                 {
                     ShowToast(hidden ? "已隐藏系统桌面图标" : "已显示系统桌面图标");
@@ -2780,6 +2808,41 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 隐藏桌面图标后启动一个看门狗进程。它只等主进程结束：
+    /// 如果主进程是被强杀的（任务管理器、崩溃），退出清理不会执行，
+    /// 图标就会一直藏着，由看门狗负责恢复。
+    /// </summary>
+    private void StartIconWatchdog()
+    {
+        if (_watchdogStarted) return;
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(exe)) return;
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = exe,
+                Arguments = "--watchdog " + Environment.ProcessId,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                WorkingDirectory = AppContext.BaseDirectory,
+            };
+
+            if (Process.Start(startInfo) is { } watchdog)
+            {
+                _watchdogStarted = true;
+                LogService.Info("已启动桌面图标看门狗 pid=" + watchdog.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("启动桌面图标看门狗失败", ex);
+        }
+    }
+
     public bool SetAutoStart(bool enabled, out string? error)
     {
         if (!DesktopService.SetAutoStart(enabled, out error))
@@ -2795,6 +2858,15 @@ public partial class MainWindow : Window
 
         State.Settings.LaunchAtLogin = enabled;
         SaveSoon();
+
+        // 关掉开机启动后，隐藏的桌面图标就没有"下次启动来救场"的人了，
+        // 直接恢复图标，避免重启后桌面空白。
+        if (!enabled && State.Settings.HideDesktopIcons)
+        {
+            _ = ApplyDesktopIconStateAsync(false, takeOwnership: false, notify: false);
+            ShowToast("已关闭开机启动，同时恢复系统桌面图标");
+        }
+
         error = null;
         return true;
     }
