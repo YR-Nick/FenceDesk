@@ -17,8 +17,8 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("FenceDesk 桌面围栏 安装程序")]
 [assembly: AssemblyCompany("FenceDesk")]
 [assembly: AssemblyProduct("FenceDesk")]
-[assembly: AssemblyVersion("1.3.48.0")]
-[assembly: AssemblyFileVersion("1.3.48.0")]
+[assembly: AssemblyVersion("1.3.49.0")]
+[assembly: AssemblyFileVersion("1.3.49.0")]
 
 namespace FenceDeskSetup
 {
@@ -87,7 +87,7 @@ namespace FenceDeskSetup
 
     internal static class InstallerCore
     {
-        public const string Version = "1.3.48";
+        public const string Version = "1.3.49";
         public const string RunValueName = "FenceDesk";
         public const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\FenceDesk";
         public const string PayloadResource = "FenceDeskPayload.zip";
@@ -96,15 +96,60 @@ namespace FenceDeskSetup
         {
             get
             {
-                if (IsAdministrator())
+                if (MachineWide)
                 {
                     return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
                         "FenceDesk");
                 }
 
-                // 拿不到管理员权限时按当前用户安装，不写系统目录。
-                return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Programs", "FenceDesk");
+                // 拿不到真实的管理员写权限时按当前用户安装，不写系统目录；
+                // 再挑一个确实可写的目录，避免装到一半才报"访问被拒绝"。
+                string[] candidates =
+                {
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "Programs", "FenceDesk"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "FenceDesk"),
+                };
+
+                foreach (string candidate in candidates)
+                {
+                    if (CanWriteTo(candidate)) return candidate;
+                }
+
+                return candidates[0];
+            }
+        }
+
+        /// <summary>
+        /// 当前进程是否真的可以写 Program Files。
+        /// 只判断 IsInRole(Administrator) 是不够的：UAC 过滤令牌下它也会返回 true，
+        /// 但写入 Program Files 仍然被拒绝（用户就是这样踩到"访问被拒绝"的）。
+        /// </summary>
+        public static bool MachineWide
+        {
+            get
+            {
+                if (!IsAdministrator()) return false;
+
+                string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                if (string.IsNullOrEmpty(programFiles)) return false;
+                return CanWriteTo(programFiles);
+            }
+        }
+
+        public static bool CanWriteTo(string directory)
+        {
+            try
+            {
+                Directory.CreateDirectory(directory);
+                string probe = Path.Combine(directory, ".fencedesk-write-" + Guid.NewGuid().ToString("N") + ".tmp");
+                File.WriteAllText(probe, "1");
+                File.Delete(probe);
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -115,10 +160,17 @@ namespace FenceDeskSetup
 
         public static bool IsAdministrator()
         {
-            using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+            try
             {
-                WindowsPrincipal principal = new WindowsPrincipal(identity);
-                return principal.IsInRole(WindowsBuiltInRole.Administrator);
+                using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+                {
+                    WindowsPrincipal principal = new WindowsPrincipal(identity);
+                    return principal.IsInRole(WindowsBuiltInRole.Administrator);
+                }
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -205,7 +257,16 @@ namespace FenceDeskSetup
 
                         string parent = Path.GetDirectoryName(destination);
                         if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
-                        entry.ExtractToFile(destination, true);
+                        try
+                        {
+                            entry.ExtractToFile(destination, true);
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new IOException(
+                                "写入 " + destination + " 失败：" + ex.Message +
+                                "\r\n（通常是文件被占用或当前权限无法写入该目录）", ex);
+                        }
                         Report(progress, "正在安装 " + entry.Name, 0.1 + 0.6 * done / total);
                     }
                 }
@@ -252,7 +313,12 @@ namespace FenceDeskSetup
             string previous = GetInstalledLocation();
 
             Report(progress, "正在停止正在运行的 FenceDesk…", 0.04);
-            StopRunningApp();
+            if (!StopRunningApp())
+            {
+                throw new InvalidOperationException(
+                    "FenceDesk 正在运行，而且当前权限无法结束它（它可能是以管理员身份启动的）。\r\n" +
+                    "请先退出 FenceDesk（托盘图标右键 → 退出 FenceDesk），再运行安装程序。");
+            }
 
             if (!string.IsNullOrEmpty(previous) && !PathsEqual(previous, target))
             {
@@ -433,7 +499,8 @@ namespace FenceDeskSetup
             }
         }
 
-        private static void StopRunningApp()
+        /// <summary>结束正在运行的 FenceDesk；返回是否全部结束（高权限实例可能杀不掉）。</summary>
+        private static bool StopRunningApp()
         {
             foreach (Process process in Process.GetProcessesByName("FenceDesk"))
             {
@@ -444,8 +511,17 @@ namespace FenceDeskSetup
                 }
                 catch
                 {
-                    // ignore
+                    // 可能是以管理员身份启动的实例，普通权限结束不了
                 }
+            }
+
+            try
+            {
+                return Process.GetProcessesByName("FenceDesk").Length == 0;
+            }
+            catch
+            {
+                return true;
             }
         }
 
@@ -500,7 +576,7 @@ namespace FenceDeskSetup
         /// <summary>有管理员权限就写系统级卸载登记，否则写在当前用户下。</summary>
         private static RegistryKey TryOpenUninstallRoot()
         {
-            if (IsAdministrator())
+            if (MachineWide)
             {
                 try
                 {
@@ -533,7 +609,7 @@ namespace FenceDeskSetup
         private static void CreateShortcuts(string installDir, string installedExe, bool createDesktop)
         {
             // 有管理员权限就建到"所有用户"菜单，否则建到当前用户菜单。
-            string programsRoot = IsAdministrator()
+            string programsRoot = MachineWide
                 ? Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms)
                 : Environment.GetFolderPath(Environment.SpecialFolder.Programs);
             string menuFolder = Path.Combine(programsRoot, "FenceDesk");
@@ -546,7 +622,7 @@ namespace FenceDeskSetup
 
             if (createDesktop)
             {
-                string desktopRoot = IsAdministrator()
+                string desktopRoot = MachineWide
                     ? Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)
                     : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 CreateShortcut(Path.Combine(desktopRoot, "FenceDesk.lnk"), installedExe, installDir, string.Empty,
@@ -762,7 +838,14 @@ namespace FenceDeskSetup
             Controls.Add(_hint);
 
             string installed = InstallerCore.GetInstalledLocation();
-            if (!string.IsNullOrEmpty(installed) &&
+            if (!InstallerCore.MachineWide)
+            {
+                _hint.Text = "当前没有管理员权限，将安装到当前用户目录（同样会开机自启）。\r\n" +
+                             "如果你已经把它装在 C:\\Program Files，请先退出 FenceDesk，" +
+                             "再右键安装包选“以管理员身份运行”。";
+                _hint.ForeColor = Color.FromArgb(0xFF, 0xB8, 0x6B);
+            }
+            else if (!string.IsNullOrEmpty(installed) &&
                 !installed.TrimEnd('\\').Equals(InstallerCore.DefaultTarget.TrimEnd('\\'),
                     StringComparison.OrdinalIgnoreCase))
             {
@@ -783,7 +866,7 @@ namespace FenceDeskSetup
             }
 
             _desktopCheck = new CheckBox();
-            _desktopCheck.Text = "创建桌面快捷方式（所有用户）";
+            _desktopCheck.Text = InstallerCore.MachineWide ? "创建桌面快捷方式（所有用户）" : "创建桌面快捷方式";
             _desktopCheck.Checked = true;
             _desktopCheck.AutoSize = true;
             _desktopCheck.ForeColor = Theme.Text;
@@ -1148,16 +1231,28 @@ namespace FenceDeskSetup
             bool silent = args.Any(a => string.Equals(a, "--silent", StringComparison.OrdinalIgnoreCase));
             bool uninstall = args.Any(a => string.Equals(a, "--uninstall", StringComparison.OrdinalIgnoreCase));
 
-            if (!InstallerCore.IsAdministrator())
+            // 真正能写 Program Files 才算"机器级安装"；UAC 过滤令牌下
+            // IsInRole(Administrator) 也会是 true，但写入仍会被拒绝。
+            if (!InstallerCore.MachineWide)
             {
-                // 先用管理员权限重启一次（正常机器上会弹 UAC）；
-                // 用户拒绝或无法提权时，降级为“当前用户安装”，而不是直接失败。
-                if (!silent && TryRelaunchElevated(args))
-                {
-                    return;
-                }
+                InstallerCore.Log("当前没有 Program Files 的写权限（UAC 过滤令牌或被拒绝提权）。");
 
-                InstallerCore.Log("未获得管理员权限，按当前用户安装。");
+                if (!silent)
+                {
+                    // 先尝试用管理员权限重新启动自己（正常机器会弹 UAC）。
+                    if (TryRelaunchElevated(args))
+                    {
+                        return;
+                    }
+
+                    DialogResult answer = MessageBox.Show(
+                        "安装到 C:\\Program Files 需要管理员权限。\r\n\r\n" +
+                        "是否改为只给当前用户安装？\r\n" +
+                        "（装到 %LOCALAPPDATA%\\Programs\\FenceDesk，开机自启、快捷方式同样有效）",
+                        "FenceDesk 安装程序", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                        MessageBoxDefaultButton.Button1);
+                    if (answer != DialogResult.Yes) return;
+                }
             }
 
             if (uninstall)
