@@ -2762,23 +2762,24 @@ public partial class MainWindow : Window
                 {
                     // 图标一旦隐藏，就必须保证重启后还有程序把围栏画出来，
                     // 否则一次强杀或直接重启就会留下一个全空的桌面。
-                    if (!State.Settings.LaunchAtLogin)
+                    // 每次都刷新开机启动项：既能补齐丢失的注册项，
+                    // 也能在程序换目录（例如升级到新版本目录）后把路径改对。
+                    var wasEnabled = State.Settings.LaunchAtLogin;
+                    if (!SetAutoStart(true, out var autoStartError))
                     {
-                        if (SetAutoStart(true, out var autoStartError))
-                        {
-                            LogService.Info("已自动开启开机启动，保证隐藏图标后重启仍能看到桌面");
-                        }
-                        else
-                        {
-                            LogService.Error("无法开启开机启动，回滚为显示桌面图标：" + autoStartError);
-                            await Task.Run(() => DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 1800));
-                            State.Settings.HideDesktopIcons = false;
-                            State.Settings.OwnsHiddenIcons = false;
-                            SaveSoon();
-                            UpdateSystemIconsVisibility();
-                            ShowToast("无法开启开机启动，已保留系统桌面图标，避免重启后桌面空白");
-                            return false;
-                        }
+                        LogService.Error("无法开启开机启动，回滚为显示桌面图标：" + autoStartError);
+                        await Task.Run(() => DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 1800));
+                        State.Settings.HideDesktopIcons = false;
+                        State.Settings.OwnsHiddenIcons = false;
+                        SaveSoon();
+                        UpdateSystemIconsVisibility();
+                        ShowToast("无法开启开机启动，已保留系统桌面图标，避免重启后桌面空白");
+                        return false;
+                    }
+
+                    if (!wasEnabled)
+                    {
+                        LogService.Info("已自动开启开机启动，保证隐藏图标后重启仍能看到桌面");
                     }
 
                     StartIconWatchdog();

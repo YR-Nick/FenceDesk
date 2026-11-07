@@ -13,12 +13,19 @@ public partial class App : Application
     private bool _ownsMutex;
     private MainWindow? _main;
 
+    /// <summary>
+    /// 带参数的“副进程”（设置开机启动、应急恢复、看门狗）不接管桌面图标，
+    /// 退出时也就不能去改桌面图标状态——否则会把正在运行的主实例藏起来的图标放出来。
+    /// </summary>
+    private bool _sidecarMode;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
         if (e.Args.Any(a => a.Equals("--set-autostart-elevated", StringComparison.OrdinalIgnoreCase)))
         {
+            _sidecarMode = true;
             var enable = !e.Args.Any(a => a.Equals("--disable-autostart", StringComparison.OrdinalIgnoreCase));
             var ok = DesktopService.SetAutoStartElevated(enable, out var helperError);
             LogService.Info("提权设置开机启动：" + (ok ? "成功" : "失败 " + helperError));
@@ -29,6 +36,7 @@ public partial class App : Application
         // 应急恢复：桌面图标被隐藏、围栏窗口却起不来时，双击带这个参数的快捷方式即可恢复。
         if (e.Args.Any(a => a.Equals("--restore-desktop", StringComparison.OrdinalIgnoreCase)))
         {
+            _sidecarMode = true;
             var restored = DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 2500);
             LogService.Info("命令行恢复桌面图标：" + (restored ? "成功" : "失败"));
             Shutdown(restored ? 0 : 1);
@@ -42,6 +50,7 @@ public partial class App : Application
             a => a.Equals("--watchdog", StringComparison.OrdinalIgnoreCase));
         if (watchdogIndex >= 0)
         {
+            _sidecarMode = true;
             var exitCode = RunIconWatchdog(watchdogIndex + 1 < e.Args.Length ? e.Args[watchdogIndex + 1] : null);
             Shutdown(exitCode);
             return;
@@ -215,7 +224,13 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        DesktopService.EmergencyRestore();
+        // 副进程（--watchdog / --restore-desktop / --set-autostart-elevated）没有接管桌面，
+        // 退出时不能碰图标状态，否则会把主实例藏起来的图标放出来。
+        if (!_sidecarMode)
+        {
+            DesktopService.EmergencyRestore();
+        }
+
         if (_ownsMutex)
         {
             try
