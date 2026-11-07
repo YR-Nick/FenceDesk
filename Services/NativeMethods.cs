@@ -377,12 +377,18 @@ internal static class NativeMethods
         return (exStyle & WS_EX_NOREDIRECTIONBITMAP) == 0;
     }
 
+    public static string ClassNameOf(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return string.Empty;
+        var sb = new StringBuilder(256);
+        GetClassName(hwnd, sb, sb.Capacity);
+        return sb.ToString();
+    }
+
     public static bool IsDesktopWindow(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return false;
-        var sb = new StringBuilder(128);
-        GetClassName(hwnd, sb, sb.Capacity);
-        var cls = sb.ToString();
+        var cls = ClassNameOf(hwnd);
         return cls.Equals("Progman", StringComparison.OrdinalIgnoreCase)
                || cls.Equals("WorkerW", StringComparison.OrdinalIgnoreCase)
                || cls.Equals("SHELLDLL_DefView", StringComparison.OrdinalIgnoreCase);

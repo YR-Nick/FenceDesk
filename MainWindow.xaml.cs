@@ -2457,6 +2457,38 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 找到桌面宿主窗口。Explorer 重启后句柄会失效，而且部分系统上
+    /// FindWindow("Progman") 会返回 0（但窗口其实还在），所以这里按
+    /// Progman → 枚举 Progman → WorkerW → 桌面窗口 逐级兜底。
+    /// </summary>
+    private static IntPtr ResolveDesktopHost(IntPtr fallback)
+    {
+        if (fallback != IntPtr.Zero && NativeMethods.IsWindow(fallback)) return fallback;
+
+        var progman = NativeMethods.FindWindow("Progman", null);
+        if (progman != IntPtr.Zero) return progman;
+
+        var found = IntPtr.Zero;
+        NativeMethods.EnumWindows((handle, _) =>
+        {
+            var name = NativeMethods.ClassNameOf(handle);
+            if (string.Equals(name, "Progman", StringComparison.OrdinalIgnoreCase))
+            {
+                found = handle;
+                return false;
+            }
+
+            return true;
+        }, IntPtr.Zero);
+        if (found != IntPtr.Zero) return found;
+
+        var worker = NativeMethods.FindWindow("WorkerW", null);
+        if (worker != IntPtr.Zero) return worker;
+
+        return NativeMethods.GetDesktopWindow();
+    }
+
+    /// <summary>
     /// 桌面层模式下维护 z 序：把自己插到“桌面窗口正上方那个窗口”的下面，
     /// 也就是紧贴桌面窗口之上、所有应用窗口之下。
     /// </summary>
@@ -2464,8 +2496,7 @@ public partial class MainWindow : Window
     {
         if (_hwnd == IntPtr.Zero || _isClosing || !_desktopLayerMode) return;
 
-        var host = NativeMethods.FindWindow("Progman", null);
-        if (host == IntPtr.Zero) host = _desktopHost;
+        var host = ResolveDesktopHost(_desktopHost);
         if (host == IntPtr.Zero) return;
         _desktopHost = host;
 
@@ -2742,6 +2773,16 @@ public partial class MainWindow : Window
         else if (State.Settings.OwnsHiddenIcons)
         {
             await ApplyDesktopIconStateAsync(false, takeOwnership: false, notify: false);
+        }
+
+        // 开机启动项必须指向当前这个 exe：升级到新目录、或旧版本遗留了别的路径时，
+        // 这里自动改写，否则下次登录会去启动一个已经不存在的程序（桌面就空了）。
+        if (State.Settings.HideDesktopIcons || State.Settings.LaunchAtLogin)
+        {
+            if (!SetAutoStart(true, out var autoStartError))
+            {
+                LogService.Info("启动时刷新开机启动失败：" + autoStartError);
+            }
         }
     }
 
