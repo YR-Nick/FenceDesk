@@ -4,7 +4,7 @@
 
 > 普通整理只保存「引用」，不会自动移动、重命名或删除你的文件。隐藏围栏会设置 Windows 的 Hidden 属性，不移动、不删除文件；取消隐藏时恢复可见。
 
-当前版本 **1.3.52**：内置 ZIP / 7z / RAR / TAR / GZ / BZ2 / XZ 解压（不再依赖 7-Zip、WinRAR），解压与压缩带进度窗口、可取消，同名文件可逐项选择覆盖 / 跳过 / 两者都保留。
+当前版本 **1.3.53**：内置 ZIP / 7z / RAR / TAR / GZ / BZ2 / XZ 解压（不再依赖 7-Zip、WinRAR），解压与压缩带进度窗口、可取消，同名文件可逐项选择覆盖 / 跳过 / 两者都保留。
 
 ![FenceDesk 主界面](docs/screenshot-main.png)
 
@@ -89,12 +89,12 @@
 安装包是**单个文件**，不需要解压整个发布目录：
 
 ```text
-dist\FenceDeskSetup-v1.3.52.exe
+dist\FenceDeskSetup-v1.3.53.exe
 ```
 
 安装步骤：
 
-1. 双击 `FenceDeskSetup-v1.3.52.exe`。
+1. 双击 `FenceDeskSetup-v1.3.53.exe`。
 2. 如果系统启用 UAC，确认管理员授权。
 3. 选择安装位置（默认 `C:\Program Files\FenceDesk`），点击“安装”，等进度条走完。
 4. 安装程序会：
@@ -111,8 +111,8 @@ dist\FenceDeskSetup-v1.3.52.exe
 静默安装（脚本/批量）：
 
 ```powershell
-.\FenceDeskSetup-v1.3.52.exe --silent --dir="C:\Program Files\FenceDesk"
-.\FenceDeskSetup-v1.3.52.exe --silent --uninstall
+.\FenceDeskSetup-v1.3.53.exe --silent --dir="C:\Program Files\FenceDesk"
+.\FenceDeskSetup-v1.3.53.exe --silent --uninstall
 ```
 
 > 安装程序本身也必须从**非受限的普通目录**启动。如果安装程序无法写 HKLM，说明整个会话被强制放进了受限沙箱，需要在正常的 Windows 登录会话中执行安装，或者由管理员手动执行下面的命令。
@@ -182,7 +182,7 @@ dotnet run --project .\FenceDesk.csproj
 .\publish.ps1
 ```
 
-产物位于 `publish\win-x64\FenceDesk.exe`，压缩包位于 `dist\FenceDesk-v1.3.52-win-x64.zip`。发布目录包含 exe 与 5 个 WPF 原生 DLL，请保持它们在同一目录。
+产物位于 `publish\win-x64\FenceDesk.exe`，压缩包位于 `dist\FenceDesk-v1.3.53-win-x64.zip`。发布目录包含 exe 与 5 个 WPF 原生 DLL，请保持它们在同一目录。
 
 也可以手工执行：
 

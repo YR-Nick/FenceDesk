@@ -17,8 +17,8 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("FenceDesk 桌面围栏 安装程序")]
 [assembly: AssemblyCompany("FenceDesk")]
 [assembly: AssemblyProduct("FenceDesk")]
-[assembly: AssemblyVersion("1.3.52.0")]
-[assembly: AssemblyFileVersion("1.3.52.0")]
+[assembly: AssemblyVersion("1.3.53.0")]
+[assembly: AssemblyFileVersion("1.3.53.0")]
 
 namespace FenceDeskSetup
 {
@@ -87,7 +87,7 @@ namespace FenceDeskSetup
 
     internal static class InstallerCore
     {
-        public const string Version = "1.3.52";
+        public const string Version = "1.3.53";
         public const string RunValueName = "FenceDesk";
         public const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\FenceDesk";
         public const string PayloadResource = "FenceDeskPayload.zip";
@@ -617,6 +617,9 @@ namespace FenceDeskSetup
 
             CreateShortcut(Path.Combine(menuFolder, "FenceDesk.lnk"), installedExe, installDir, string.Empty,
                 "FenceDesk 桌面围栏");
+            // 应急用：桌面图标被隐藏、围栏又没起来时，从开始菜单一键恢复，不用记命令行。
+            CreateShortcut(Path.Combine(menuFolder, "恢复桌面图标.lnk"), installedExe, installDir,
+                "--restore-desktop", "恢复被 FenceDesk 隐藏的系统桌面图标");
             CreateShortcut(Path.Combine(menuFolder, "卸载 FenceDesk.lnk"),
                 Path.Combine(installDir, "Uninstall.exe"), installDir, "--uninstall", "卸载 FenceDesk");
 
