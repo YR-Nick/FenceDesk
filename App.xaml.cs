@@ -14,10 +14,33 @@ public partial class App : Application
     private MainWindow? _main;
 
     /// <summary>
+    /// 抢单实例互斥量。给"提权重启"留出旧进程退出的时间：那次重启会先起新进程、
+    /// 旧进程随后退出，如果新进程立刻失败就会变成"一个都没起来"。
+    /// </summary>
+    private static bool TryAcquireInstanceMutex(Mutex mutex, int timeoutMs)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (true)
+        {
+            try
+            {
+                if (mutex.WaitOne(0)) return true;
+            }
+            catch (AbandonedMutexException)
+            {
+                return true; // 上一个实例被强杀，互斥量归我们
+            }
+
+            if (Environment.TickCount64 >= deadline) return false;
+            Thread.Sleep(150);
+        }
+    }
+
+    /// <summary>
     /// 带参数的“副进程”（设置开机启动、应急恢复、看门狗）不接管桌面图标，
     /// 退出时也就不能去改桌面图标状态——否则会把正在运行的主实例藏起来的图标放出来。
     /// </summary>
-    private bool _sidecarMode;
+    private bool _suppressIconRestore;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -25,7 +48,7 @@ public partial class App : Application
 
         if (e.Args.Any(a => a.Equals("--set-autostart-elevated", StringComparison.OrdinalIgnoreCase)))
         {
-            _sidecarMode = true;
+            _suppressIconRestore = true;
             var enable = !e.Args.Any(a => a.Equals("--disable-autostart", StringComparison.OrdinalIgnoreCase));
             var ok = DesktopService.SetAutoStartElevated(enable, out var helperError);
             LogService.Info("提权设置开机启动：" + (ok ? "成功" : "失败 " + helperError));
@@ -36,7 +59,7 @@ public partial class App : Application
         // 应急恢复：桌面图标被隐藏、围栏窗口却起不来时，双击带这个参数的快捷方式即可恢复。
         if (e.Args.Any(a => a.Equals("--restore-desktop", StringComparison.OrdinalIgnoreCase)))
         {
-            _sidecarMode = true;
+            _suppressIconRestore = true;
             var restored = DesktopService.SetDesktopIconsHidden(false, takeOwnership: false, 2500);
             LogService.Info("命令行恢复桌面图标：" + (restored ? "成功" : "失败"));
             Shutdown(restored ? 0 : 1);
@@ -50,9 +73,25 @@ public partial class App : Application
             a => a.Equals("--watchdog", StringComparison.OrdinalIgnoreCase));
         if (watchdogIndex >= 0)
         {
-            _sidecarMode = true;
+            _suppressIconRestore = true;
             var exitCode = RunIconWatchdog(watchdogIndex + 1 < e.Args.Length ? e.Args[watchdogIndex + 1] : null);
             Shutdown(exitCode);
+            return;
+        }
+
+        // 单实例判定必须放在最前面：第二个实例（重复自启、用户又点了一次图标、
+        // 提权重启留下的旧进程）绝不能再执行"启动自检"把图标放出来，
+        // 否则正在运行的围栏就会和系统桌面图标同时出现。
+        _instanceMutex = new Mutex(false, @"Local\FenceDesk.DesktopFences.1.0");
+        _ownsMutex = TryAcquireInstanceMutex(_instanceMutex, 2500);
+        if (!_ownsMutex)
+        {
+            _instanceMutex.Dispose();
+            _instanceMutex = null;
+            // 重复启动的实例也不能在退出时"恢复图标"，否则会把主实例藏起来的图标放出来。
+            _suppressIconRestore = true;
+            LogService.Info("已有一个 FenceDesk 在运行，本次启动直接退出（不改动桌面图标）");
+            Shutdown();
             return;
         }
 
@@ -111,16 +150,6 @@ public partial class App : Application
             {
                 LogService.Error("普通权限重启失败，继续以管理员运行", ex);
             }
-        }
-
-        _instanceMutex = new Mutex(true, @"Local\FenceDesk.DesktopFences.1.0", out var isFirstInstance);
-        _ownsMutex = isFirstInstance;
-        if (!isFirstInstance)
-        {
-            _instanceMutex.Dispose();
-            _instanceMutex = null;
-            Shutdown();
-            return;
         }
 
         if (e.Args.Any(a => a.Equals("--demo", StringComparison.OrdinalIgnoreCase)))
@@ -226,7 +255,7 @@ public partial class App : Application
     {
         // 副进程（--watchdog / --restore-desktop / --set-autostart-elevated）没有接管桌面，
         // 退出时不能碰图标状态，否则会把主实例藏起来的图标放出来。
-        if (!_sidecarMode)
+        if (!_suppressIconRestore)
         {
             DesktopService.EmergencyRestore();
         }

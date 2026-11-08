@@ -58,6 +58,8 @@ public partial class MainWindow : Window
     private bool _initialized;
     private bool _fencesHidden;
     private bool _watchdogStarted;
+    private bool _iconReconcileBusy;
+    private DateTime _lastIconReconcileUtc = DateTime.MinValue;
     private DateTime _lastVisibilityChangeUtc = DateTime.MinValue;
     private bool _recycleBinBusy;
     private bool _originalDesktopMode;
@@ -191,6 +193,7 @@ public partial class MainWindow : Window
             EnsureAboveDesktop();
             CheckDesktopSurfaceRefresh();
             ReconcileFenceCanvasState();
+            ReconcileDesktopIcons();
         };
         _desktopGuardTimer.Start();
         _lastGuardTick = DateTime.UtcNow;
@@ -3030,6 +3033,45 @@ public partial class MainWindow : Window
         {
             _originalDesktopBusy = false;
         }
+    }
+
+    /// <summary>
+    /// 兜底：FenceDesk 接管桌面图标期间，如果图标被外部恢复可见
+    /// （资源管理器重启、"显示桌面图标"被点、重复启动的实例跑了启动自检等），
+    /// 这里重新藏起来，避免围栏和系统图标同时出现在桌面上。
+    /// </summary>
+    private void ReconcileDesktopIcons()
+    {
+        if (_isClosing || !_initialized || _originalDesktopMode || _fencesHidden) return;
+        if (!State.Settings.HideDesktopIcons || !State.Settings.OwnsHiddenIcons) return;
+        if (_iconReconcileBusy) return;
+
+        var now = DateTime.UtcNow;
+        if ((now - _lastIconReconcileUtc).TotalSeconds < 6) return;
+        _lastIconReconcileUtc = now;
+
+        if (DesktopService.AreDesktopIconsHidden()) return;
+
+        _iconReconcileBusy = true;
+        _ = Task.Run(() =>
+        {
+            var ok = false;
+            try
+            {
+                ok = DesktopService.SetDesktopIconsHidden(true, takeOwnership: false, 1800);
+            }
+            finally
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _iconReconcileBusy = false;
+                    if (!ok) return;
+                    State.Settings.OwnsHiddenIcons = true;
+                    SaveSoon();
+                    LogService.Info("[state] 桌面图标被外部恢复，已重新接管");
+                }));
+            }
+        });
     }
 
     /// <summary>

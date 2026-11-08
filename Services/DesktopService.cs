@@ -786,6 +786,9 @@ public static class DesktopService
             var exe = Environment.ProcessPath;
             if (!string.IsNullOrWhiteSpace(exe) && MachineRunValueMatches(exe))
             {
+                // 机器级启动项已经指向当前程序，顺手清掉重复的用户级启动项，
+                // 否则登录时会被启动两次（第二次会立刻退出，但没必要）。
+                RemoveDuplicateUserRunEntry(exe);
                 return true;
             }
 
@@ -872,8 +875,24 @@ public static class DesktopService
         }
     }
 
-    private static bool MachineRunValueMatches(string exe)
+    /// <summary>机器级启动项已经生效时，清掉指向同一个 exe 的用户级重复项。</summary>
+    private static void RemoveDuplicateUserRunEntry(string exe)
     {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunRegistryPath, writable: true);
+            if (key?.GetValue(RunValueName) is not string value) return;
+            if (!value.Contains(exe, StringComparison.OrdinalIgnoreCase)) return;
+            key.DeleteValue(RunValueName, throwOnMissingValue: false);
+            LogService.Info("已清理重复的用户级开机启动项（机器级项已生效）");
+        }
+        catch
+        {
+            // 清理失败不影响功能
+        }
+    }
+
+    private static bool MachineRunValueMatches(string exe)    {
         try
         {
             using var key = Registry.LocalMachine.OpenSubKey(RunRegistryPath);
