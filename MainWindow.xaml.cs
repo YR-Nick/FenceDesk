@@ -60,7 +60,9 @@ public partial class MainWindow : Window
     private bool _watchdogStarted;
     private bool _iconReconcileBusy;
     private DateTime _lastIconReconcileUtc = DateTime.MinValue;
+    private DateTime _lastIconCacheRefreshUtc = DateTime.MinValue;
     private DateTime _lastVisibilityChangeUtc = DateTime.MinValue;
+    private IconCacheWatcher? _iconCacheWatcher;
     private bool _recycleBinBusy;
     private bool _originalDesktopMode;
     private bool _originalDesktopBusy;
@@ -290,6 +292,11 @@ public partial class MainWindow : Window
 
             _keyboardHook = new KeyboardHook { TryHandle = TryHandleShortcut };
             UpdateMusicIsland();
+
+            // 图标缓存（iconcache_*.db）被重建时自动重读图标，不需要重启程序。
+            _iconCacheWatcher = new IconCacheWatcher();
+            _iconCacheWatcher.Changed += () => HandleIconCacheChanged("iconcache 变化");
+            _iconCacheWatcher.Start();
 
             if (DiagEnabled)
             {
@@ -1038,7 +1045,9 @@ public partial class MainWindow : Window
         else
         {
             control.RefreshMissing();
-            control.RefreshIcons();
+            // 手动"刷新围栏"时强制重取图标：图标缓存重建后这是最直接的补救手段。
+            IconService.InvalidateAll();
+            control.RefreshIcons(force: true);
         }
 
         ShowToast(removed > 0 ? $"已清理 {removed} 个失效项目" : "围栏已刷新");
@@ -1821,12 +1830,36 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RefreshAllFenceIcons()
+    private void RefreshAllFenceIcons(bool force = false)
     {
         foreach (var control in _fences.Values)
         {
             control.RefreshMissing();
-            control.RefreshIcons();
+            control.RefreshIcons(force);
+        }
+    }
+
+    /// <summary>
+    /// 图标缓存被重建（iconcache 刷新、优化工具替换、Explorer 重启）后重新取图标。
+    /// 桌面图标由围栏自己绘制，进程里缓存的旧位图会变成白方块，只能靠重新请求恢复。
+    /// </summary>
+    private void HandleIconCacheChanged(string reason)
+    {
+        if (_isClosing) return;
+
+        var now = DateTime.UtcNow;
+        if ((now - _lastIconCacheRefreshUtc).TotalSeconds < 8) return;
+        _lastIconCacheRefreshUtc = now;
+
+        try
+        {
+            IconService.InvalidateAll();
+            RefreshAllFenceIcons(force: true);
+            LogService.Info("图标缓存变化（" + reason + "），已重新读取围栏图标");
+        }
+        catch (Exception ex)
+        {
+            LogService.Error("图标缓存变化后刷新失败", ex);
         }
     }
 
@@ -2501,6 +2534,13 @@ public partial class MainWindow : Window
 
         var host = ResolveDesktopHost(_desktopHost);
         if (host == IntPtr.Zero) return;
+        if (_desktopHost != IntPtr.Zero && host != _desktopHost)
+        {
+            // 桌面宿主换了 = Explorer 重启过，图标缓存和图标索引都可能重建。
+            LogService.Info("桌面宿主变化，重新读取图标");
+            _iconCacheWatcher?.Trigger();
+        }
+
         _desktopHost = host;
 
         var above = NativeMethods.GetWindow(host, NativeMethods.GW_HWNDPREV);
@@ -3278,6 +3318,8 @@ public partial class MainWindow : Window
         _keyboardHook = null;
         _musicIsland?.Dispose();
         _musicIsland = null;
+        _iconCacheWatcher?.Dispose();
+        _iconCacheWatcher = null;
         _tray?.Dispose();
         _tray = null;
     }

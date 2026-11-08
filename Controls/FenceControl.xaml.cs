@@ -35,6 +35,9 @@ public partial class FenceControl : UserControl
     private bool _unloaded;
     private bool _loadingIcons;
     private bool _iconReloadQueued;
+    private bool _forceIconReload;
+    private int _iconRetryCount;
+    private readonly DispatcherTimer _iconRetryTimer;
 
     public FenceModel Model => _model;
 
@@ -68,6 +71,16 @@ public partial class FenceControl : UserControl
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+
+        // 取不到图标时（图标缓存正在重建）隔几秒自动重试，不用重启程序。
+        _iconRetryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+        _iconRetryTimer.Tick += (_, _) =>
+        {
+            _iconRetryTimer.Stop();
+            if (_unloaded) return;
+            RefreshIconsAsync();
+        };
+
         SizeChanged += (_, _) => Dispatcher.BeginInvoke(new Action(UpdateScrollFade), DispatcherPriority.Background);
         Shell.MouseEnter += (_, _) => UpdateHoverState(true);
         Shell.MouseLeave += (_, _) => UpdateHoverState(false);
@@ -119,8 +132,11 @@ public partial class FenceControl : UserControl
 
     public void StartRename() => BeginRename();
 
-    public void RefreshIcons()
+    /// <summary>重新读取图标。force=true 时会丢掉已有图标重新请求（图标缓存被重建后用）。</summary>
+    public void RefreshIcons(bool force = false)
     {
+        if (force) _forceIconReload = true;
+
         foreach (var item in _model.Items)
         {
             item.IconLoadStarted = false;
@@ -155,7 +171,9 @@ public partial class FenceControl : UserControl
                 foreach (var item in _model.Items.ToList())
                 {
                     if (_unloaded) return;
-                    if (item.Icon is not null || item.IconLoadStarted) continue;
+                    if (item.IconLoadStarted) continue;
+                    // 正常情况下已有图标就不再重复请求；强制刷新时全部重取。
+                    if (!_forceIconReload && item.Icon is not null) continue;
                     item.IconLoadStarted = true;
                     var target = item.Path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)
                         ? DesktopService.ResolveShortcutTarget(item.Path)
@@ -164,14 +182,25 @@ public partial class FenceControl : UserControl
                     if (icon is not null && !_unloaded)
                     {
                         item.Icon = icon;
+                        _iconRetryCount = 0;
                     }
                     else if (icon is null)
                     {
                         // 允许下次刷新重试，避免一次失败后图标永久空白。
                         item.IconLoadStarted = false;
+                        _iconRetryCount++;
                     }
                 }
             } while (_iconReloadQueued);
+
+            if (_forceIconReload) _forceIconReload = false;
+
+            // 有取不到的图标（图标缓存正在重建时会取到空）→ 过几秒自动重试，
+            // 不需要用户重启程序。
+            if (_iconRetryCount > 0 && _iconRetryCount < 6 && !_iconRetryTimer.IsEnabled)
+            {
+                _iconRetryTimer.Start();
+            }
         }
         catch (Exception ex)
         {

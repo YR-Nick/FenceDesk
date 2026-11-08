@@ -70,6 +70,16 @@ public static class IconService
         }
     }
 
+    /// <summary>
+    /// 清空全部缓存。图标缓存被重建（ICONCACHE 刷新、优化工具替换、Explorer 重启）后，
+    /// 进程里留着的位图可能已经失效，必须重新向 Shell 请求。
+    /// </summary>
+    public static void InvalidateAll()
+    {
+        Cache.Clear();
+        ShellCache.Clear();
+    }
+
     private static ImageSource? LoadShellCore(string parsingName)
     {
         var pidl = IntPtr.Zero;
@@ -138,35 +148,38 @@ public static class IconService
 
             var info = new NativeMethods.SHFILEINFO();
             var size = (uint)Marshal.SizeOf<NativeMethods.SHFILEINFO>();
-            var result = NativeMethods.SHGetFileInfo(path, 0, ref info, size,
-                NativeMethods.SHGFI_ICON | NativeMethods.SHGFI_LARGEICON);
-            if (result != IntPtr.Zero && info.hIcon != IntPtr.Zero)
+
+            // 先取 48px（EXTRALARGE）图像列表：围栏图标通常按 42px 显示，
+            // 48 → 42 是缩小，比拿 32px 的 SHGFI_ICON 再放大清晰得多。
+            var indexResult = NativeMethods.SHGetFileInfo(path, 0, ref info, size,
+                NativeMethods.SHGFI_SYSICONINDEX | NativeMethods.SHGFI_LARGEICON);
+            if (indexResult != IntPtr.Zero)
             {
-                hIcon = info.hIcon;
+                var iid = typeof(NativeMethods.IImageList).GUID;
+                if (NativeMethods.SHGetImageList(NativeMethods.SHIL_EXTRALARGE, ref iid, out var list) == 0)
+                {
+                    try
+                    {
+                        if (list.GetIcon(info.iIcon, NativeMethods.ILD_TRANSPARENT, out hIcon) != 0)
+                        {
+                            hIcon = IntPtr.Zero;
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(list);
+                    }
+                }
             }
 
             if (hIcon == IntPtr.Zero)
             {
                 info = new NativeMethods.SHFILEINFO();
-                var fallback = NativeMethods.SHGetFileInfo(path, 0, ref info, size,
-                    NativeMethods.SHGFI_SYSICONINDEX | NativeMethods.SHGFI_LARGEICON);
-                if (fallback != IntPtr.Zero)
+                var result = NativeMethods.SHGetFileInfo(path, 0, ref info, size,
+                    NativeMethods.SHGFI_ICON | NativeMethods.SHGFI_LARGEICON);
+                if (result != IntPtr.Zero && info.hIcon != IntPtr.Zero)
                 {
-                    var iid = typeof(NativeMethods.IImageList).GUID;
-                    if (NativeMethods.SHGetImageList(NativeMethods.SHIL_EXTRALARGE, ref iid, out var list) == 0)
-                    {
-                        try
-                        {
-                            if (list.GetIcon(info.iIcon, NativeMethods.ILD_TRANSPARENT, out hIcon) != 0)
-                            {
-                                hIcon = IntPtr.Zero;
-                            }
-                        }
-                        finally
-                        {
-                            Marshal.ReleaseComObject(list);
-                        }
-                    }
+                    hIcon = info.hIcon;
                 }
             }
 

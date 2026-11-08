@@ -4,7 +4,7 @@
 
 > 普通整理只保存「引用」，不会自动移动、重命名或删除你的文件。隐藏围栏会设置 Windows 的 Hidden 属性，不移动、不删除文件；取消隐藏时恢复可见。
 
-当前版本 **1.3.51**：内置 ZIP / 7z / RAR / TAR / GZ / BZ2 / XZ 解压（不再依赖 7-Zip、WinRAR），解压与压缩带进度窗口、可取消，同名文件可逐项选择覆盖 / 跳过 / 两者都保留。
+当前版本 **1.3.52**：内置 ZIP / 7z / RAR / TAR / GZ / BZ2 / XZ 解压（不再依赖 7-Zip、WinRAR），解压与压缩带进度窗口、可取消，同名文件可逐项选择覆盖 / 跳过 / 两者都保留。
 
 ![FenceDesk 主界面](docs/screenshot-main.png)
 
@@ -23,7 +23,8 @@
 - **压缩与解压**：右键可把文件/文件夹压缩为 ZIP；解压由程序内置解码器完成，支持 ZIP、7z、RAR、TAR、GZ、TGZ、BZ2、XZ，不需要安装 7-Zip 或 WinRAR。解压和压缩都有进度窗口（百分比、文件计数、速度、当前文件），可随时取消；遇到同名文件会逐项询问「覆盖 / 跳过 / 两者都保留」，并可勾选「对后面所有冲突都使用这个选择」。所有条目先做路径校验，压缩包里的 `../` 不会写到目标目录之外。
 - **打开方式**：图片、压缩包及其他文件可右键选择“打开方式…”，调用 Windows 的应用选择器。
 - **系统图标**：回收站、此电脑、网络、用户文件夹以独立桌面图标显示在左下角，不放进围栏；右键可打开属性、计算机管理、清空回收站等系统功能。清空回收站后会立即刷新空桶/满桶图标。
-- **快捷方式图标**：优先解析快捷方式目标程序的图标，加载失败会自动重试，避免整理后只显示白色占位图标。
+- **快捷方式图标**：优先解析快捷方式目标程序的图标，加载失败会自动重试，避免整理后只显示白色占位图标。图标优先取 48px 的 Shell 图像列表再缩放到设置里的尺寸，比把 32px 放大清楚。
+- **图标实时刷新**：监视 `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache*`，重建图标缓存、更新图标索引或 Explorer 重启后约 1.5 秒自动重读全部图标，不需要重启 FenceDesk；每 20 秒还有一次签名比对兜底。手动"刷新围栏"也会强制重取。
 - **桌面联动**：点击任务栏右下角的“显示桌面”按钮时，围栏保持显示；如果 Windows 试图最小化围栏窗口，会自动恢复。
 - **补收遗漏项目**：设置中可开启“扫描隐藏 / 系统桌面项目”，再点“重新扫描桌面”把隐藏项目补收进围栏。
 - **自动分类**：首次启动扫描桌面，按开发工具 / 常用工具 / 通讯聊天 / 办公工具 / 文档资料 / 文件夹 / 游戏娱乐 / 图片素材 / 其他分组建立围栏；新安装应用生成的桌面快捷方式会按名称和目标路径自动归入对应围栏，并复用同名自定义围栏。
@@ -88,12 +89,12 @@
 安装包是**单个文件**，不需要解压整个发布目录：
 
 ```text
-dist\FenceDeskSetup-v1.3.51.exe
+dist\FenceDeskSetup-v1.3.52.exe
 ```
 
 安装步骤：
 
-1. 双击 `FenceDeskSetup-v1.3.51.exe`。
+1. 双击 `FenceDeskSetup-v1.3.52.exe`。
 2. 如果系统启用 UAC，确认管理员授权。
 3. 选择安装位置（默认 `C:\Program Files\FenceDesk`），点击“安装”，等进度条走完。
 4. 安装程序会：
@@ -110,8 +111,8 @@ dist\FenceDeskSetup-v1.3.51.exe
 静默安装（脚本/批量）：
 
 ```powershell
-.\FenceDeskSetup-v1.3.51.exe --silent --dir="C:\Program Files\FenceDesk"
-.\FenceDeskSetup-v1.3.51.exe --silent --uninstall
+.\FenceDeskSetup-v1.3.52.exe --silent --dir="C:\Program Files\FenceDesk"
+.\FenceDeskSetup-v1.3.52.exe --silent --uninstall
 ```
 
 > 安装程序本身也必须从**非受限的普通目录**启动。如果安装程序无法写 HKLM，说明整个会话被强制放进了受限沙箱，需要在正常的 Windows 登录会话中执行安装，或者由管理员手动执行下面的命令。
@@ -181,7 +182,7 @@ dotnet run --project .\FenceDesk.csproj
 .\publish.ps1
 ```
 
-产物位于 `publish\win-x64\FenceDesk.exe`，压缩包位于 `dist\FenceDesk-v1.3.51-win-x64.zip`。发布目录包含 exe 与 5 个 WPF 原生 DLL，请保持它们在同一目录。
+产物位于 `publish\win-x64\FenceDesk.exe`，压缩包位于 `dist\FenceDesk-v1.3.52-win-x64.zip`。发布目录包含 exe 与 5 个 WPF 原生 DLL，请保持它们在同一目录。
 
 也可以手工执行：
 
