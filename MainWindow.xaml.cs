@@ -978,11 +978,16 @@ public partial class MainWindow : Window
         foreach (var desktopItem in DesktopService.EnumerateDesktopItems(State.Settings.IncludeHiddenDesktopItems))
         {
             enumerated++;
-            if (desktopItem.Path.Contains("最新游戏下载", StringComparison.OrdinalIgnoreCase))
+            if (known.Contains(desktopItem.Path)) continue;
+
+            // 被"从围栏移除"过的项目默认跳过，但如果文件本身变过
+            // （重装软件、重建快捷方式），就重新收纳，否则会像以前那样永久消失。
+            if (ignored.Contains(desktopItem.Path))
             {
-                LogService.Info($"导入候选: {desktopItem.Path} ignored={ignored.Contains(desktopItem.Path)} known={known.Contains(desktopItem.Path)}");
+                if (!ShouldReimportIgnored(desktopItem)) continue;
+                ForgetIgnored(desktopItem.Path);
+                ignored.Remove(desktopItem.Path);
             }
-            if (ignored.Contains(desktopItem.Path) || known.Contains(desktopItem.Path)) continue;
             var targetPath = desktopItem.IsDirectory
                 ? null
                 : DesktopService.ResolveShortcutTarget(desktopItem.Path);
@@ -1158,10 +1163,7 @@ public partial class MainWindow : Window
     {
         if (fence.Model.IsPortal) return;
         if (!fence.Model.Items.Remove(item)) return;
-        if (!State.IgnoredPaths.Any(p => string.Equals(p, item.Path, StringComparison.OrdinalIgnoreCase)))
-        {
-            State.IgnoredPaths.Add(item.Path);
-        }
+        IgnoreDesktopPath(item.Path);
         SaveSoon();
         ShowToast("已从围栏中移除，桌面文件不会被删除");
     }
@@ -1543,10 +1545,7 @@ public partial class MainWindow : Window
             removedEmptyFences++;
         }
 
-        if (!State.IgnoredPaths.Any(p => string.Equals(p, oldPath, StringComparison.OrdinalIgnoreCase)))
-        {
-            State.IgnoredPaths.Add(oldPath);
-        }
+        IgnoreDesktopPath(oldPath);
 
         RefreshAllFenceIcons();
         RefreshPortalViews();
@@ -3024,8 +3023,63 @@ public partial class MainWindow : Window
     public void ClearIgnoredPaths()
     {
         State.IgnoredPaths.Clear();
+        State.IgnoredPathStamps.Clear();
         SaveSoon();
         ShowToast("已恢复之前从围栏移除的项目，重新整理桌面即可再次收纳");
+    }
+
+    /// <summary>把路径记进"已忽略"，同时记下它当时的文件时间。</summary>
+    private void IgnoreDesktopPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        if (!State.IgnoredPaths.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)))
+        {
+            State.IgnoredPaths.Add(path);
+        }
+
+        State.IgnoredPathStamps[path] = LastWriteOf(path);
+    }
+
+    private void ForgetIgnored(string path)
+    {
+        State.IgnoredPaths.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        foreach (var key in State.IgnoredPathStamps.Keys
+                     .Where(k => string.Equals(k, path, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            State.IgnoredPathStamps.Remove(key);
+        }
+    }
+
+    /// <summary>忽略过的项目是否应该重新收纳：文件在"忽略之后"被改过/重建过。</summary>
+    private bool ShouldReimportIgnored(DesktopItem item)
+    {
+        var current = LastWriteOf(item.Path);
+        if (current == DateTime.MinValue) return false; // 文件已不存在，保持忽略
+
+        if (State.IgnoredPathStamps.TryGetValue(item.Path, out var stamp))
+        {
+            return current > stamp;
+        }
+
+        // 旧版本留下的忽略项没有时间戳：以当前时间建档，之后文件再变就会重新收录。
+        State.IgnoredPathStamps[item.Path] = current;
+        SaveSoon();
+        return false;
+    }
+
+    private static DateTime LastWriteOf(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) return File.GetLastWriteTimeUtc(path);
+            if (Directory.Exists(path)) return Directory.GetLastWriteTimeUtc(path);
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return DateTime.MinValue;
     }
 
     private void DockAdd_Click(object sender, RoutedEventArgs e) => CreateNewFence();

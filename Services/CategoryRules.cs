@@ -23,6 +23,9 @@ public static class CategoryRules
         "调试", "编译", "仿真", "单片机", "嵌入式", "代码", "intellij", "pycharm", "webstorm",
         "clion", "android studio", "unity", "unreal", "docker", "postman", "navicat",
         "dbeaver", "xshell", "mobaxterm", "sourcetree", "gitkraken", "eclipse",
+        // EDA / 电路设计
+        "立创", "嘉立创", "easyeda", "lceda", "eda", "altium", "ad20", "pads", "cadence",
+        "allegro", "立创商城", "原理图", "pcb",
     };
 
     private static readonly string[] ChatKeywords =

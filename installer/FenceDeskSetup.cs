@@ -17,8 +17,8 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("FenceDesk 桌面围栏 安装程序")]
 [assembly: AssemblyCompany("FenceDesk")]
 [assembly: AssemblyProduct("FenceDesk")]
-[assembly: AssemblyVersion("1.3.53.0")]
-[assembly: AssemblyFileVersion("1.3.53.0")]
+[assembly: AssemblyVersion("1.3.54.0")]
+[assembly: AssemblyFileVersion("1.3.54.0")]
 
 namespace FenceDeskSetup
 {
@@ -87,7 +87,7 @@ namespace FenceDeskSetup
 
     internal static class InstallerCore
     {
-        public const string Version = "1.3.53";
+        public const string Version = "1.3.54";
         public const string RunValueName = "FenceDesk";
         public const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\FenceDesk";
         public const string PayloadResource = "FenceDeskPayload.zip";

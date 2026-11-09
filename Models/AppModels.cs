@@ -30,6 +30,13 @@ public sealed class AppState
     public AppSettings Settings { get; set; } = new();
     public List<FenceModel> Fences { get; set; } = new();
     public List<string> IgnoredPaths { get; set; } = new();
+
+    /// <summary>
+    /// 每个被"从围栏移除"的项目当时的文件时间。
+    /// 有了它，重装软件、重新创建同名快捷方式后能被识别成"新东西"重新收纳，
+    /// 而不是像以前那样永久忽略。
+    /// </summary>
+    public Dictionary<string, DateTime> IgnoredPathStamps { get; set; } = new();
 }
 
 public sealed class AppSettings
