@@ -330,7 +330,12 @@
                     <ControlTemplate TargetType="{x:Type TextBox}">
                         <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                            <!-- PART_ContentHost 上不能再加 Margin/Border.Padding：TextBox 内部已经按
+                                 Padding 排版文本，模板再加一次会让可视高度只剩几个像素，
+                                 中文被裁成一条细线（看起来像乱码）。 -->
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                          HorizontalScrollBarVisibility="Hidden"
+                                          VerticalScrollBarVisibility="Hidden" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsKeyboardFocused" Value="True">
