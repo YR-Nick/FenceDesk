@@ -733,10 +733,26 @@ public partial class FenceControl : UserControl
     private MenuItem BuildSortMenu()
     {
         var sortMenu = new MenuItem { Header = "排序图标" };
-        AddMenu(sortMenu, "按名称", () => _host.SortFence(this, FenceSortMode.Name));
-        AddMenu(sortMenu, "按类型", () => _host.SortFence(this, FenceSortMode.Type));
-        AddMenu(sortMenu, "按修改日期", () => _host.SortFence(this, FenceSortMode.Modified));
+        AddSortItem(sortMenu, "按使用次数（常用在前）", FenceSortMode.Usage);
+        sortMenu.Items.Add(new Separator());
+        AddSortItem(sortMenu, "按名称", FenceSortMode.Name);
+        AddSortItem(sortMenu, "按类型", FenceSortMode.Type);
+        AddSortItem(sortMenu, "按修改日期", FenceSortMode.Modified);
+        sortMenu.Items.Add(new Separator());
+        AddSortItem(sortMenu, "保持当前顺序", FenceSortMode.Manual);
         return sortMenu;
+    }
+
+    private void AddSortItem(ItemsControl parent, string header, FenceSortMode mode)
+    {
+        var item = new MenuItem
+        {
+            Header = header,
+            IsCheckable = true,
+            IsChecked = _model.SortMode == mode,
+        };
+        item.Click += (_, _) => _host.SortFence(this, mode);
+        parent.Items.Add(item);
     }
 
     private MenuItem BuildPortalMenu()

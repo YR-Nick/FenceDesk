@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _desktopReconcileTimer;
     private readonly DispatcherTimer _hiddenRequestTimer;
     private readonly DispatcherTimer _zOrderTimer;
+    private readonly DispatcherTimer _usageSortTimer;
     private readonly DispatcherTimer _desktopGuardTimer;
 
     private HwndSource? _hwndSource;
@@ -186,6 +187,20 @@ public partial class MainWindow : Window
 
         _zOrderTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
         _zOrderTimer.Tick += (_, _) => KeepAtBottom();
+
+        // 启动记录后延迟重排，避免连续点开几个程序时反复洗牌。
+        _usageSortTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+        _usageSortTimer.Tick += (_, _) =>
+        {
+            _usageSortTimer.Stop();
+            if (_isClosing) return;
+            foreach (var model in State.Fences.Where(f => f.SortMode == FenceSortMode.Usage).ToList())
+            {
+                ApplySortOrder(model, FenceSortMode.Usage);
+            }
+
+            SaveSoon();
+        };
 
         // 桌面子窗口的 z-order 会被 Explorer 的 SHELLDLL_DefView 改变，
         // 定期把自己提回 WorkerW 的顶层，否则围栏看起来在、鼠标却点到桌面。
@@ -357,6 +372,11 @@ public partial class MainWindow : Window
             if (fence.IsPortal)
             {
                 LoadPortalItems(fence, notify: false);
+            }
+            else if (fence.SortMode != FenceSortMode.Manual)
+            {
+                // 恢复围栏保存的排序方式（例如"按使用次数"）
+                ApplySortOrder(fence, fence.SortMode);
             }
 
             AddFenceControl(fence, animate: false);
@@ -1184,6 +1204,7 @@ public partial class MainWindow : Window
             if (ok)
             {
                 item.IsMissing = false;
+                RecordLaunch(item);
                 return;
             }
 
@@ -1872,24 +1893,53 @@ public partial class MainWindow : Window
 
     public void SortFence(FenceControl control, FenceSortMode mode)
     {
-        var items = control.Model.Items.ToList();
-        IEnumerable<FenceItemModel> sorted = mode switch
-        {
-            FenceSortMode.Type => items
-                .OrderBy(i => i.IsDirectory ? "0" : Path.GetExtension(i.Path), StringComparer.OrdinalIgnoreCase)
-                .ThenBy(i => i.DisplayName, StringComparer.CurrentCultureIgnoreCase),
-            FenceSortMode.Modified => items
-                .OrderByDescending(GetModifiedTime)
-                .ThenBy(i => i.DisplayName, StringComparer.CurrentCultureIgnoreCase),
-            _ => items.OrderBy(i => i.DisplayName, StringComparer.CurrentCultureIgnoreCase),
-        };
-
-        control.Model.Items.Clear();
-        foreach (var item in sorted)
-        {
-            control.Model.Items.Add(item);
-        }
+        control.Model.SortMode = mode;
+        ApplySortOrder(control.Model, mode);
         SaveSoon();
+
+        ShowToast(mode switch
+        {
+            FenceSortMode.Usage => "已按使用次数排序（常用在前）",
+            FenceSortMode.Manual => "已保持当前顺序，不再自动排序",
+            FenceSortMode.Type => "已按类型排序",
+            FenceSortMode.Modified => "已按修改日期排序",
+            _ => "已按名称排序",
+        });
+    }
+
+    /// <summary>按指定方式排列围栏里的图标；Manual 不做任何调整。</summary>
+    private void ApplySortOrder(FenceModel model, FenceSortMode mode)
+    {
+        if (mode == FenceSortMode.Manual) return;
+
+        var ordered = UsageRanking.Order(model.Items, mode, DateTime.UtcNow);
+        var changed = false;
+        for (var i = 0; i < ordered.Count && i < model.Items.Count; i++)
+        {
+            if (ReferenceEquals(ordered[i], model.Items[i])) continue;
+            changed = true;
+            break;
+        }
+
+        if (!changed) return;
+
+        model.Items.Clear();
+        foreach (var item in ordered)
+        {
+            model.Items.Add(item);
+        }
+    }
+
+    /// <summary>记录一次启动，用于"按使用次数"排序。</summary>
+    private void RecordLaunch(FenceItemModel item)
+    {
+        UsageRanking.Record(item, DateTime.UtcNow);
+        SaveSoon();
+
+        // 如果围栏是按使用次数排序的，稍后重排一次；
+        // 用定时器去抖，避免连续启动多个程序时反复重排。
+        _usageSortTimer.Stop();
+        _usageSortTimer.Start();
     }
 
     private static DateTime GetModifiedTime(FenceItemModel item)

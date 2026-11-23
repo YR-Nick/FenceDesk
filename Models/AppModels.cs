@@ -133,6 +133,10 @@ public sealed class FenceModel : ObservableObject
         set => Set(ref _categoryKey, value);
     }
 
+    /// <summary>当前排序方式；Manual 表示保持用户当前的顺序，不做自动排序。</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public FenceSortMode SortMode { get; set; } = FenceSortMode.Manual;
+
     /// <summary>非空时，此围栏是实时显示该文件夹内容的“文件夹门户”。</summary>
     public string? FolderPath
     {
@@ -332,6 +336,15 @@ public sealed class FenceItemModel : ObservableObject
         Path = path;
         IsPortalItem = portalItem;
     }
+
+    /// <summary>累计启动次数，用于显示和粗略参考。</summary>
+    public int LaunchCount { get; set; }
+
+    /// <summary>带 30 天半衰期的使用热度，用于"按使用次数"排序。</summary>
+    public double UsageScore { get; set; }
+
+    /// <summary>UsageScore 上一次衰减到的时间（UTC）。</summary>
+    public DateTime UsageDecayedUtc { get; set; }
 }
 
 public enum FenceSortMode
@@ -339,6 +352,12 @@ public enum FenceSortMode
     Name,
     Type,
     Modified,
+
+    /// <summary>按使用次数（带时间衰减）排序，常用的排前面。</summary>
+    Usage,
+
+    /// <summary>保持用户当前的顺序，不自动排序。</summary>
+    Manual,
 }
 
 public sealed record FenceDragPayload(string FenceId, string Path)
