@@ -304,10 +304,23 @@ public static class DesktopService
 
     public static string? ResolveShortcutTarget(string path)
     {
+        return TryResolveShortcut(path, out var target, out _) ? target : null;
+    }
+
+    /// <summary>
+    /// 解析快捷方式的目标程序与启动参数。
+    /// 判断"是不是同一个应用"必须连参数一起比：ESP-IDF 5.4 / 5.5 的 CMD 快捷方式
+    /// 目标是同一个 cmd.exe，靠参数区分。
+    /// </summary>
+    public static bool TryResolveShortcut(string path, out string target, out string arguments)
+    {
+        target = string.Empty;
+        arguments = string.Empty;
+
         if (string.IsNullOrWhiteSpace(path) ||
             !path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
         {
-            return null;
+            return false;
         }
 
         object? shell = null;
@@ -315,10 +328,10 @@ public static class DesktopService
         try
         {
             var shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType is null) return null;
+            if (shellType is null) return false;
 
             shell = Activator.CreateInstance(shellType);
-            if (shell is null) return null;
+            if (shell is null) return false;
 
             shortcut = shellType.InvokeMember(
                 "CreateShortcut",
@@ -326,20 +339,28 @@ public static class DesktopService
                 null,
                 shell,
                 new object[] { path });
-            if (shortcut is null) return null;
+            if (shortcut is null) return false;
 
-            var target = shortcut.GetType().InvokeMember(
+            target = shortcut.GetType().InvokeMember(
                 "TargetPath",
                 BindingFlags.GetProperty,
                 null,
                 shortcut,
-                null) as string;
-            return string.IsNullOrWhiteSpace(target) ? null : target;
+                null) as string ?? string.Empty;
+
+            arguments = shortcut.GetType().InvokeMember(
+                "Arguments",
+                BindingFlags.GetProperty,
+                null,
+                shortcut,
+                null) as string ?? string.Empty;
+
+            return !string.IsNullOrWhiteSpace(target);
         }
         catch (Exception ex)
         {
             LogService.Error("解析快捷方式目标失败: " + path, ex);
-            return null;
+            return false;
         }
         finally
         {

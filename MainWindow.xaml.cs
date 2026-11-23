@@ -280,6 +280,12 @@ public partial class MainWindow : Window
                 RenderFences();
             }
 
+            // 合并指向同一个程序的重复快捷方式（只跑一次）。
+            if (MergeDuplicateApps())
+            {
+                RenderFences();
+            }
+
             BuildSystemIconsPanel();
             UpdateSystemIconsVisibility();
             UpdateOriginalDesktopButton();
@@ -1001,6 +1007,14 @@ public partial class MainWindow : Window
         var added = 0;
         var enumerated = 0;
 
+        // 已经收进围栏的程序（目标程序 + 参数），用来挡住桌面上的重复快捷方式。
+        var knownAppKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in known)
+        {
+            var key = AppKeyOf(path);
+            if (key is not null) knownAppKeys.Add(key);
+        }
+
         foreach (var desktopItem in DesktopService.EnumerateDesktopItems(State.Settings.IncludeHiddenDesktopItems))
         {
             enumerated++;
@@ -1014,6 +1028,19 @@ public partial class MainWindow : Window
                 ForgetIgnored(desktopItem.Path);
                 ignored.Remove(desktopItem.Path);
             }
+
+            // 同一个程序已经有一个快捷方式在围栏里了（升级残留、手动建了两次），
+            // 不再重复显示第二个。文件本身不动，随时可以在设置里恢复。
+            var appKey = AppKeyOf(desktopItem.Path);
+            if (appKey is not null && knownAppKeys.Contains(appKey))
+            {
+                IgnoreDesktopPath(desktopItem.Path);
+                ignored.Add(desktopItem.Path);
+                LogService.Info($"跳过重复的快捷方式: {desktopItem.Path}");
+                continue;
+            }
+
+            if (appKey is not null) knownAppKeys.Add(appKey);
             var targetPath = desktopItem.IsDirectory
                 ? null
                 : DesktopService.ResolveShortcutTarget(desktopItem.Path);
@@ -3197,6 +3224,72 @@ public partial class MainWindow : Window
         State.IgnoredPathStamps.Clear();
         SaveSoon();
         ShowToast("已恢复之前从围栏移除的项目，重新整理桌面即可再次收纳");
+    }
+
+    /// <summary>快捷方式 -> "目标程序|参数" 的缓存，避免每次都走 COM 解析。</summary>
+    private readonly Dictionary<string, string> _appKeyCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>取快捷方式代表的应用标识（目标程序 + 参数）；不是快捷方式返回 null。</summary>
+    private string? AppKeyOf(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        if (_appKeyCache.TryGetValue(path, out var cached)) return cached.Length == 0 ? null : cached;
+
+        string? key = null;
+        if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) &&
+            DesktopService.TryResolveShortcut(path, out var target, out var arguments) &&
+            !string.IsNullOrWhiteSpace(target))
+        {
+            key = AppShortcut.MakeKey(target, arguments);
+        }
+
+        _appKeyCache[path] = key ?? string.Empty;
+        return key;
+    }
+
+    /// <summary>
+    /// 把"指向同一个程序、参数也相同"的多个快捷方式合并成一个显示。
+    /// 只从围栏里移除多余的那几个（并记进忽略列表），**桌面上的文件一个都不删**。
+    /// </summary>
+    private bool MergeDuplicateApps()
+    {
+        if (State.Settings.SettingsMigrationVersion >= 7) return false;
+        State.Settings.SettingsMigrationVersion = 7;
+
+        var paths = State.Fences
+            .Where(f => !f.IsHidden && !f.IsPortal)
+            .SelectMany(f => f.Items)
+            .Select(i => i.Path)
+            .ToList();
+
+        var groups = DuplicateAppFinder.Find(DuplicateAppFinder.Describe(paths));
+        var removed = 0;
+        foreach (var group in groups)
+        {
+            foreach (var extra in group.Extras)
+            {
+                var owner = State.Fences.FirstOrDefault(f =>
+                    !f.IsPortal && f.Items.Any(i => string.Equals(i.Path, extra.Path, StringComparison.OrdinalIgnoreCase)));
+                if (owner is null) continue;
+
+                var item = owner.Items.First(i => string.Equals(i.Path, extra.Path, StringComparison.OrdinalIgnoreCase));
+                owner.Items.Remove(item);
+                IgnoreDesktopPath(extra.Path);
+                removed++;
+            }
+
+            LogService.Info("重复应用：保留 " + group.Keeper.Path + "，隐藏 " +
+                            string.Join(" / ", group.Extras.Select(e => e.Path)));
+        }
+
+        SaveSoon();
+        if (removed > 0)
+        {
+            ShowToast($"已合并 {removed} 个重复的快捷方式（桌面文件未删除，可在设置里恢复）");
+            LogService.Info($"重复应用合并：隐藏了 {removed} 个重复快捷方式");
+        }
+
+        return removed > 0;
     }
 
     /// <summary>把路径记进"已忽略"，同时记下它当时的文件时间。</summary>
