@@ -58,6 +58,7 @@ public partial class MainWindow : Window
 
     private bool _initialized;
     private bool _fencesHidden;
+    private DateTime? _captureStuckSince;
     private bool _watchdogStarted;
     private bool _iconReconcileBusy;
     private DateTime _lastIconReconcileUtc = DateTime.MinValue;
@@ -211,6 +212,7 @@ public partial class MainWindow : Window
             CheckDesktopSurfaceRefresh();
             ReconcileFenceCanvasState();
             ReconcileDesktopIcons();
+            ReleaseStuckMouseCapture();
         };
         _desktopGuardTimer.Start();
         _lastGuardTick = DateTime.UtcNow;
@@ -3437,6 +3439,36 @@ public partial class MainWindow : Window
     /// Visibility、IsHitTestVisible、Opacity，一旦某条路径漏改，就会出现
     /// "围栏看着在、鼠标点不动、滚轮也没反应"。这里每 650ms 对齐一次。
     /// </summary>
+    /// <summary>
+    /// 兜底：某个控件拖拽没正常收尾时，鼠标捕获会一直挂着，
+    /// 结果是"整个桌面点不动、只有围栏精灵还能跟手"。
+    /// 这里检测"持有捕获 + 左键已松开"超过 1.5 秒就强制释放。
+    /// </summary>
+    private void ReleaseStuckMouseCapture()
+    {
+        if (_isClosing || !_initialized) return;
+
+        var captured = Mouse.Captured;
+        if (captured is null)
+        {
+            _captureStuckSince = null;
+            return;
+        }
+
+        if (Mouse.LeftButton == MouseButtonState.Pressed)
+        {
+            _captureStuckSince = null;
+            return;
+        }
+
+        _captureStuckSince ??= DateTime.UtcNow;
+        if ((DateTime.UtcNow - _captureStuckSince.Value).TotalMilliseconds < 1500) return;
+
+        Mouse.Capture(null);
+        _captureStuckSince = null;
+        LogService.Info("[state] 自动释放卡住的鼠标捕获（" + captured.GetType().Name + "），避免整个桌面点不动");
+    }
+
     private void ReconcileFenceCanvasState()
     {
         if (_isClosing || !_initialized) return;

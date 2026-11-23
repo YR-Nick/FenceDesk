@@ -158,7 +158,17 @@ public partial class MusicIslandControl : UserControl, IDisposable
 
     private void Island_MouseMove(object sender, MouseEventArgs e)
     {
-        if (!_dragging || e.LeftButton != MouseButtonState.Pressed) return;
+        if (!_dragging) return;
+
+        // 按键已经松开却没收到 MouseLeftButtonUp（拖到窗口外、被别的窗口抢走捕获、
+        // 或合成事件序列被截断）时，必须在这里收尾：否则捕获会一直挂在围栏精灵身上，
+        // 整个桌面的点击都会被它吞掉——表现出来就是"围栏卡死、只有精灵跟着鼠标"。
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            EndIslandDrag();
+            return;
+        }
+
         if (Parent is not Canvas canvas) return;
 
         var current = e.GetPosition(canvas);
@@ -171,10 +181,21 @@ public partial class MusicIslandControl : UserControl, IDisposable
 
     private void Island_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (!_dragging) return;
+        var wasDragging = _dragging;
+        EndIslandDrag();
+        if (wasDragging) e.Handled = true;
+    }
+
+    private void Island_LostMouseCapture(object sender, MouseEventArgs e)
+    {
         _dragging = false;
-        ReleaseMouseCapture();
-        e.Handled = true;
+    }
+
+    /// <summary>结束拖动并确保释放鼠标捕获（幂等）。</summary>
+    private void EndIslandDrag()
+    {
+        _dragging = false;
+        if (IsMouseCaptured) ReleaseMouseCapture();
     }
 
     public void Dispose()

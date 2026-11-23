@@ -9,7 +9,8 @@
             BorderBrush="#48FFFFFF" BorderThickness="1"
             MouseLeftButtonDown="Island_MouseLeftButtonDown"
             MouseMove="Island_MouseMove"
-            MouseLeftButtonUp="Island_MouseLeftButtonUp">
+            MouseLeftButtonUp="Island_MouseLeftButtonUp"
+            LostMouseCapture="Island_LostMouseCapture">
         <Border.Effect>
             <DropShadowEffect BlurRadius="16" ShadowDepth="4" Direction="270" Opacity="0.45" Color="#000000" />
         </Border.Effect>
