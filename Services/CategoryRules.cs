@@ -121,6 +121,17 @@ public static class CategoryRules
         Key = "office", Title = "办公工具", Accent = "violet", Order = 3,
     };
 
+    /// <summary>
+    /// 唯一的"文件"围栏：文件夹、图片、文档、压缩包、音视频…… 凡是文件都进这里。
+    /// 桌面上的文件通常是临时的、数量不多，不值得再细分；
+    /// 需要细分的是应用。
+    /// </summary>
+    public static readonly CategoryDefinition Files = new()
+    {
+        Key = "files", Title = "文件", Accent = "green", Order = 5,
+    };
+
+    /// <summary>旧的细分文件围栏（仅用于迁移时识别和合并）。</summary>
     public static readonly CategoryDefinition Documents = new()
     {
         Key = "docs", Title = "文档资料", Accent = "violet", Order = 4,
@@ -148,7 +159,7 @@ public static class CategoryRules
 
     public static readonly IReadOnlyList<CategoryDefinition> All = new[]
     {
-        Dev, Tools, Chat, Office, Documents, Folders, Games, Media, Other,
+        Dev, Tools, Chat, Office, Games, Files,
     };
 
     public static CategoryDefinition Classify(string path, bool isDirectory, string? targetPath = null)
@@ -163,9 +174,15 @@ public static class CategoryRules
         var targetFull = (targetPath ?? string.Empty).ToLowerInvariant();
         var signature = lowerName + " " + targetName + " " + targetFull;
 
+        // 文件夹、图片、文档、压缩包…… 所有"文件"统一进一个围栏。
         if (isDirectory)
         {
-            return Folders;
+            return Files;
+        }
+
+        if (!ProgramExtensions.Contains(lowerExt))
+        {
+            return Files;
         }
 
         // 游戏平台的安装目录优先识别，避免被“Program Files”等通用路径干扰。
@@ -176,16 +193,7 @@ public static class CategoryRules
             return Games;
         }
 
-        // 数据文件（图片、文档、音视频）先按扩展名归类。
-        // 否则 "微信图片_20261122.png"、"QQ截图.png" 这类名字会因为带聊天软件关键字
-        // 被归进"通讯聊天"。快捷方式和可执行文件没有内容类型，才走关键字判断。
-        var isApp = ProgramExtensions.Contains(lowerExt) || lowerExt.Length == 0;
-        if (!isApp)
-        {
-            if (MediaExtensions.Contains(lowerExt)) return Media;
-            if (DocExtensions.Contains(lowerExt)) return Documents;
-        }
-
+        // 剩下的都是程序：按名称 / 目标路径的关键词分到应用围栏里。
         if (ContainsAny(signature, DevKeywords))
         {
             return Dev;
@@ -212,35 +220,17 @@ public static class CategoryRules
             return Office;
         }
 
-        // 文档/图像类**应用**（Notion、Obsidian、剪映…）归到程序围栏，
-        // 和"文档资料 / 图片素材"这类按文件类型分的围栏分开。
         if (ContainsAny(signature, ToolKeywords))
         {
             return Tools;
         }
 
-        if (DocExtensions.Contains(lowerExt))
-        {
-            return Documents;
-        }
-
-        if (MediaExtensions.Contains(lowerExt))
-        {
-            return Media;
-        }
-
-        // 程序（快捷方式/可执行文件）没有命中任何关键词时归到常用工具，
-        // 不要落到"其他"——那是个文件围栏。
-        if (isApp)
-        {
-            return Tools;
-        }
-
-        return Other;
+        // 程序没有命中任何关键词时归到常用工具。
+        return Tools;
     }
 
     public static CategoryDefinition ByKey(string? key)
-        => All.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase)) ?? Other;
+        => All.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase)) ?? Tools;
 
     /// <summary>
     /// 是否是"按内容归类"的数据文件（图片、文档、音视频）。
@@ -264,13 +254,16 @@ public static class CategoryRules
 
     /// <summary>
     /// 该分类围栏装的是"文件"还是"程序"。
-    /// 文件围栏：图片素材 / 文档资料 / 其他；程序围栏：开发 / 常用 / 聊天 / 办公 / 游戏。
+    /// 文件围栏只有一个"文件"；media/docs/other/folders 是旧版本留下的细分围栏，
+    /// 仍然认作文件围栏，好让迁移把它们合并掉。
     /// </summary>
     public static bool IsFileCategory(string? key)
     {
         if (string.IsNullOrEmpty(key)) return false;
-        return string.Equals(key, Media.Key, StringComparison.OrdinalIgnoreCase)
+        return string.Equals(key, Files.Key, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, Media.Key, StringComparison.OrdinalIgnoreCase)
                || string.Equals(key, Documents.Key, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, Folders.Key, StringComparison.OrdinalIgnoreCase)
                || string.Equals(key, Other.Key, StringComparison.OrdinalIgnoreCase);
     }
 

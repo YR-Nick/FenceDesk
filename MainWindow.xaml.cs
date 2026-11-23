@@ -1090,15 +1090,47 @@ public partial class MainWindow : Window
     /// 只有"类别装错了"才搬运（文件进了程序围栏、或程序进了文件围栏），
     /// 程序之间的位置保持用户手动摆放的样子。
     /// </summary>
+    /// <summary>
+    /// 一次性整理：文件全部并进唯一的"文件"围栏，应用按类型细分到各自的应用围栏。
+    /// 视频、文档、压缩包、文件夹都算"文件"，不再细分；只有应用才分类。
+    /// 应用之间的位置完全不动（保留用户手动摆放）。
+    /// </summary>
     private bool MigrateCategoryAssignments()
     {
-        if (State.Settings.SettingsMigrationVersion >= 5) return false;
-        State.Settings.SettingsMigrationVersion = 5;
+        if (State.Settings.SettingsMigrationVersion >= 6) return false;
+        State.Settings.SettingsMigrationVersion = 6;
 
         var moved = 0;
-        foreach (var fence in State.Fences.Where(f => !f.IsHidden && !f.IsPortal && !string.IsNullOrEmpty(f.CategoryKey)).ToList())
+        var categoryFences = State.Fences
+            .Where(f => !f.IsHidden && !f.IsPortal && !string.IsNullOrEmpty(f.CategoryKey))
+            .ToList();
+
+        // 复用已有的文件类围栏（图片素材/文档资料/文件夹/其他）当合并目标，
+        // 这样它原来的位置和大小保持不变。
+        var fileFence = categoryFences.FirstOrDefault(f => CategoryRules.IsFileCategory(f.CategoryKey));
+        if (fileFence is null)
         {
-            var fenceIsFileCategory = CategoryRules.IsFileCategory(fence.CategoryKey);
+            fileFence = new FenceModel
+            {
+                Title = CategoryRules.Files.Title,
+                Accent = CategoryRules.Files.Accent,
+                CategoryKey = CategoryRules.Files.Key,
+                X = 64,
+                Y = 480,
+                Width = 340,
+                Height = 360,
+            };
+            State.Fences.Add(fileFence);
+        }
+        else
+        {
+            fileFence.Title = CategoryRules.Files.Title;
+            fileFence.CategoryKey = CategoryRules.Files.Key;
+            fileFence.Accent = CategoryRules.Files.Accent;
+        }
+
+        foreach (var fence in categoryFences)
+        {
             foreach (var item in fence.Items.ToList())
             {
                 if (string.IsNullOrWhiteSpace(item.Path)) continue;
@@ -1106,26 +1138,36 @@ public partial class MainWindow : Window
                 bool isDirectory;
                 try { isDirectory = Directory.Exists(item.Path); }
                 catch { isDirectory = false; }
-                if (isDirectory) continue;
 
-                var isApp = CategoryRules.IsAppFile(item.Path);
-                // 文件围栏装文件、程序围栏装程序：类型一致就不动
-                if (fenceIsFileCategory == !isApp) continue;
+                var isApp = !isDirectory && CategoryRules.IsAppFile(item.Path);
+
+                // 文件（含文件夹、压缩包、图片、文档）：全部并到"文件"围栏
+                if (!isApp)
+                {
+                    if (ReferenceEquals(fence, fileFence)) continue;
+                    fence.Items.Remove(item);
+                    if (!fileFence.Items.Any(i => string.Equals(i.Path, item.Path, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        fileFence.Items.Add(item);
+                    }
+
+                    moved++;
+                    continue;
+                }
+
+                // 应用：只有待在文件围栏里的才需要搬；已经在应用围栏里的保持用户摆放
+                if (!CategoryRules.IsFileCategory(fence.CategoryKey)) continue;
 
                 string? target = null;
-                if (isApp &&
-                    (item.Path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
-                     item.Path.EndsWith(".url", StringComparison.OrdinalIgnoreCase)))
+                if (item.Path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
+                    item.Path.EndsWith(".url", StringComparison.OrdinalIgnoreCase))
                 {
                     target = DesktopService.ResolveShortcutTarget(item.Path);
                 }
 
                 var category = CategoryRules.Classify(item.Path, isDirectory: false, targetPath: target);
-                // 防止规则把程序归到文件围栏（反之亦然）
-                if (CategoryRules.IsFileCategory(category.Key) == isApp) continue;
-
                 var destination = EnsureCategoryFence(category);
-                if (ReferenceEquals(destination.Model, fence)) continue;
+                if (ReferenceEquals(destination.Model, fence) || ReferenceEquals(destination.Model, fileFence)) continue;
 
                 fence.Items.Remove(item);
                 if (!destination.Model.Items.Any(i => string.Equals(i.Path, item.Path, StringComparison.OrdinalIgnoreCase)))
@@ -1137,24 +1179,26 @@ public partial class MainWindow : Window
             }
         }
 
-        // 搬空了的分类围栏直接去掉，避免桌面上留一个空壳。
-        foreach (var empty in State.Fences
-                     .Where(f => !f.IsHidden && !f.IsPortal && !string.IsNullOrEmpty(f.CategoryKey) && f.Items.Count == 0)
+        // 合并后清空的旧文件围栏去掉（图片素材 / 文档资料 / 文件夹 / 其他）
+        foreach (var stale in State.Fences
+                     .Where(f => !f.IsHidden && !f.IsPortal
+                                 && !ReferenceEquals(f, fileFence)
+                                 && CategoryRules.IsFileCategory(f.CategoryKey)
+                                 && f.Items.Count == 0)
                      .ToList())
         {
-            State.Fences.Remove(empty);
-            if (_fences.TryGetValue(empty.Id, out var control))
+            State.Fences.Remove(stale);
+            if (_fences.TryGetValue(stale.Id, out var control))
             {
-                _fences.Remove(empty.Id);
+                _fences.Remove(stale.Id);
                 FenceCanvas.Children.Remove(control);
             }
         }
 
         SaveSoon();
-        if (moved > 0) LogService.Info($"文件与程序分栏：调整了 {moved} 个项目");
+        if (moved > 0) LogService.Info($"文件归入「文件」围栏：调整了 {moved} 个项目");
         return moved > 0;
     }
-
     private FenceControl EnsureCategoryFence(CategoryDefinition category)
     {
         var existing = State.Fences.FirstOrDefault(f =>
