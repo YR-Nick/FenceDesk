@@ -274,6 +274,12 @@ public partial class MainWindow : Window
         try
         {
             RenderFences();
+            // 分类规则变更后，把已经分错的项目挪回正确的围栏（只跑一次）。
+            if (MigrateCategoryAssignments())
+            {
+                RenderFences();
+            }
+
             BuildSystemIconsPanel();
             UpdateSystemIconsVisibility();
             UpdateOriginalDesktopButton();
@@ -1076,6 +1082,58 @@ public partial class MainWindow : Window
         }
 
         ShowToast(removed > 0 ? $"已清理 {removed} 个失效项目" : "围栏已刷新");
+    }
+
+    /// <summary>
+    /// 分类规则改过之后，把"分类围栏"里**归错类的数据文件**（图片、文档、音视频）挪到正确的围栏。
+    /// 只动数据文件，不动应用快捷方式——用户可能故意把某个程序放在别的围栏里。
+    /// 只跑一次（SettingsMigrationVersion），之后尊重用户的手动摆放。
+    /// </summary>
+    private bool MigrateCategoryAssignments()
+    {
+        if (State.Settings.SettingsMigrationVersion >= 3) return false;
+        State.Settings.SettingsMigrationVersion = 3;
+
+        var moved = 0;
+        foreach (var fence in State.Fences.Where(f => !f.IsHidden && !f.IsPortal && !string.IsNullOrEmpty(f.CategoryKey)).ToList())
+        {
+            foreach (var item in fence.Items.ToList())
+            {
+                if (string.IsNullOrWhiteSpace(item.Path)) continue;
+                if (!CategoryRules.IsDataFile(item.Path)) continue;
+
+                var category = CategoryRules.Classify(item.Path, isDirectory: false);
+                if (string.Equals(category.Key, fence.CategoryKey, StringComparison.OrdinalIgnoreCase)) continue;
+
+                var destination = EnsureCategoryFence(category);
+                if (ReferenceEquals(destination.Model, fence)) continue;
+
+                fence.Items.Remove(item);
+                if (!destination.Model.Items.Any(i => string.Equals(i.Path, item.Path, StringComparison.OrdinalIgnoreCase)))
+                {
+                    destination.Model.Items.Add(item);
+                }
+
+                moved++;
+            }
+        }
+
+        // 搬空了的分类围栏直接去掉，避免桌面上留一个空壳。
+        foreach (var empty in State.Fences
+                     .Where(f => !f.IsHidden && !f.IsPortal && !string.IsNullOrEmpty(f.CategoryKey) && f.Items.Count == 0)
+                     .ToList())
+        {
+            State.Fences.Remove(empty);
+            if (_fences.TryGetValue(empty.Id, out var control))
+            {
+                _fences.Remove(empty.Id);
+                FenceCanvas.Children.Remove(control);
+            }
+        }
+
+        SaveSoon();
+        if (moved > 0) LogService.Info($"按新规则重新分类了 {moved} 个数据文件");
+        return moved > 0;
     }
 
     private FenceControl EnsureCategoryFence(CategoryDefinition category)

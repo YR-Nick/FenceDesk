@@ -35,6 +35,13 @@ public static class CategoryRules
         "陌陌", "soul", "探探", "聊天", "通讯",
     };
 
+    /// <summary>音乐/视频播放类：比聊天关键字更具体，要排在它前面判断。</summary>
+    private static readonly string[] PlaybackKeywords =
+    {
+        "qq音乐", "网易云", "cloudmusic", "酷狗", "酷我", "spotify", "potplayer", "vlc",
+        "mpc-hc", "foobar", "音乐", "播放器", "影音", "bilibili", "哔哩哔哩",
+    };
+
     private static readonly string[] OfficeKeywords =
     {
         "word", "excel", "powerpoint", "wps", "office", "acrobat", "foxit", "福昕",
@@ -169,6 +176,16 @@ public static class CategoryRules
             return Games;
         }
 
+        // 数据文件（图片、文档、音视频）先按扩展名归类。
+        // 否则 "微信图片_20261122.png"、"QQ截图.png" 这类名字会因为带聊天软件关键字
+        // 被归进"通讯聊天"。快捷方式和可执行文件没有内容类型，才走关键字判断。
+        var isApp = ProgramExtensions.Contains(lowerExt) || lowerExt.Length == 0;
+        if (!isApp)
+        {
+            if (MediaExtensions.Contains(lowerExt)) return Media;
+            if (DocExtensions.Contains(lowerExt)) return Documents;
+        }
+
         if (ContainsAny(signature, DevKeywords))
         {
             return Dev;
@@ -177,6 +194,12 @@ public static class CategoryRules
         if (ContainsAny(signature, GameKeywords))
         {
             return Games;
+        }
+
+        // 音乐/播放器类应用先于聊天判断：否则 "QQ音乐"、"网易云音乐" 会被 "qq"/"云" 抢走。
+        if (ContainsAny(signature, PlaybackKeywords))
+        {
+            return Tools;
         }
 
         if (ContainsAny(signature, ChatKeywords))
@@ -224,6 +247,18 @@ public static class CategoryRules
 
     public static CategoryDefinition ByKey(string? key)
         => All.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase)) ?? Other;
+
+    /// <summary>
+    /// 是否是"按内容归类"的数据文件（图片、文档、音视频）。
+    /// 应用快捷方式不算——用户可能故意把某个程序放在别的围栏里。
+    /// </summary>
+    public static bool IsDataFile(string path)
+    {
+        var ext = Path.GetExtension(path);
+        if (string.IsNullOrEmpty(ext)) return false;
+        var lower = ext.ToLowerInvariant();
+        return MediaExtensions.Contains(lower) || DocExtensions.Contains(lower);
+    }
 
     private static bool ContainsAny(string value, IEnumerable<string> keywords)
         => keywords.Any(k => value.Contains(k, StringComparison.OrdinalIgnoreCase));
