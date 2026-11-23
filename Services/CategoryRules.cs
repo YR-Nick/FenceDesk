@@ -212,16 +212,8 @@ public static class CategoryRules
             return Office;
         }
 
-        if (ContainsAny(signature, DocAppKeywords))
-        {
-            return Documents;
-        }
-
-        if (ContainsAny(signature, MediaAppKeywords))
-        {
-            return Media;
-        }
-
+        // 文档/图像类**应用**（Notion、Obsidian、剪映…）归到程序围栏，
+        // 和"文档资料 / 图片素材"这类按文件类型分的围栏分开。
         if (ContainsAny(signature, ToolKeywords))
         {
             return Tools;
@@ -237,7 +229,9 @@ public static class CategoryRules
             return Media;
         }
 
-        if (ProgramExtensions.Contains(lowerExt))
+        // 程序（快捷方式/可执行文件）没有命中任何关键词时归到常用工具，
+        // 不要落到"其他"——那是个文件围栏。
+        if (isApp)
         {
             return Tools;
         }
@@ -258,6 +252,26 @@ public static class CategoryRules
         if (string.IsNullOrEmpty(ext)) return false;
         var lower = ext.ToLowerInvariant();
         return MediaExtensions.Contains(lower) || DocExtensions.Contains(lower);
+    }
+
+    /// <summary>是否是程序（快捷方式、可执行文件、脚本）。</summary>
+    public static bool IsAppFile(string path)
+    {
+        var ext = Path.GetExtension(path);
+        if (string.IsNullOrEmpty(ext)) return false;
+        return ProgramExtensions.Contains(ext.ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// 该分类围栏装的是"文件"还是"程序"。
+    /// 文件围栏：图片素材 / 文档资料 / 其他；程序围栏：开发 / 常用 / 聊天 / 办公 / 游戏。
+    /// </summary>
+    public static bool IsFileCategory(string? key)
+    {
+        if (string.IsNullOrEmpty(key)) return false;
+        return string.Equals(key, Media.Key, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, Documents.Key, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, Other.Key, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ContainsAny(string value, IEnumerable<string> keywords)
